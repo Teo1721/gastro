@@ -1,5 +1,8 @@
 'use client'
-export const dynamic = 'force-dynamic'
+
+// 1. Force Next.js to skip static generation for this page
+export const dynamic = 'force-dynamic';
+
 import { useEffect, useState } from 'react'
 import { createClient } from '../supabase-client'
 import { Sidebar } from '@/components/Sidebar'
@@ -7,11 +10,23 @@ import { Sidebar } from '@/components/Sidebar'
 export default function FinancePage() {
   const supabase = createClient()
   const [invoices, setInvoices] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchInvoices = async () => {
-      const { data } = await supabase.from('invoices').select('*, locations(name)').order('service_date', { ascending: false })
-      if (data) setInvoices(data)
+      try {
+        const { data, error } = await supabase
+          .from('invoices')
+          .select('*, locations(name)')
+          .order('service_date', { ascending: false })
+        
+        if (error) throw error
+        if (data) setInvoices(data)
+      } catch (err) {
+        console.error('Error fetching invoices:', err)
+      } finally {
+        setLoading(false)
+      }
     }
     fetchInvoices()
   }, [])
@@ -37,19 +52,28 @@ export default function FinancePage() {
               </tr>
             </thead>
             <tbody>
-              {invoices.map(inv => (
-                <tr key={inv.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                  <td className="p-4 text-slate-600">{inv.service_date}</td>
-                  <td className="p-4 text-slate-600">{inv.locations?.name}</td>
-                  <td className="p-4 font-medium text-slate-900">{inv.supplier_name}</td>
-                  <td className="p-4 text-right font-mono text-slate-900">${inv.total_amount}</td>
-                  <td className="p-4">
-                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${inv.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                      {inv.status.toUpperCase()}
-                    </span>
+              {/* 2. Added Safe Guard: loading check and optional chaining */}
+              {!loading && invoices?.length > 0 ? (
+                invoices.map(inv => (
+                  <tr key={inv.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                    <td className="p-4 text-slate-600">{inv.service_date}</td>
+                    <td className="p-4 text-slate-600">{inv.locations?.name || 'N/A'}</td>
+                    <td className="p-4 font-medium text-slate-900">{inv.supplier_name}</td>
+                    <td className="p-4 text-right font-mono text-slate-900">${inv.total_amount}</td>
+                    <td className="p-4">
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${(inv.status || '').toLowerCase() === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {(inv.status || 'PENDING').toUpperCase()}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="p-8 text-center text-slate-500">
+                    {loading ? "Loading records..." : "No records found."}
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
