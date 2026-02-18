@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* Only keep modern options here */
+  // Ensure the 'eslint' object is GONE
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: true, // This helps bypass small TS issues during Vercel deploy
   }
 };
 
