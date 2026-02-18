@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { createClient } from '../supabase-client'
+import { createClient } from '@/lib/supabase-client'
 
 export function FinanceTable() {
   const [invoices, setInvoices] = useState<any[]>([])
