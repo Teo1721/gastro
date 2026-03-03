@@ -293,11 +293,16 @@ export default function OpsDashboard() {
       }
 
       const { data: emps } = await supabase.from('employees')
-        .select('id, full_name, real_hour_cost, status')
+        .select('id, full_name, real_hour_cost, base_rate, status')
         .eq('location_id', selectedLocation.location_id)
       if (emps) {
         setEmployees(emps.filter((e: any) => e.status !== 'nieaktywny')
-          .map((e: any) => ({ id: e.id, full_name: e.full_name, real_hour_cost: e.real_hour_cost })))
+          .map((e: any) => ({
+            id: e.id,
+            full_name: e.full_name,
+            // Prefer explicit real_hour_cost; fall back to base_rate from DB
+            real_hour_cost: e.real_hour_cost ?? e.base_rate ?? 0,
+          })))
       } else setEmployees([])
 
       const { data: hrs } = await supabase.from('employee_daily_hours')
