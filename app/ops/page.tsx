@@ -376,6 +376,7 @@ export default function OpsDashboard() {
   const planGross = Number(salesForm.targetGross) || 0
   const planTx = Number(salesForm.targetTx) || 0
   const netManual = Number(salesForm.netRevenue) || 0
+  // Sprzedaż netto (bez VAT) – bazowa wartość dla raportów i analityki
   const netCalculated = gross > 0 ? gross / (1 + VAT_RATE) : 0
   const net = netManual > 0 ? netManual : netCalculated
   const isNetManual = netManual > 0
@@ -405,6 +406,8 @@ export default function OpsDashboard() {
   const rateAgg = Number(salesForm.avgRateAgg) || 0
   const totalHours = employeeTotals.totalHours > 0 ? employeeTotals.totalHours : hoursAgg
   const laborCost = employeeTotals.totalCost > 0 ? employeeTotals.totalCost : hoursAgg * rateAgg
+  // Netto po kosztach: sprzedaż netto minus koszt pracy i koszty operacyjne (sekcja 7)
+  const netAfterCosts = net - laborCost - dailyOpsTotal
   const laborPercent = net > 0 ? laborCost / net : 0
   const salesPerHour = totalHours > 0 ? net / totalHours : 0
   const effectiveHourlyRate = totalHours > 0 ? laborCost / totalHours : 0
@@ -932,10 +935,24 @@ export default function OpsDashboard() {
                       disabled={isReadOnly} className={`bg-gray-50 h-12 text-lg pl-8 ${fieldErr('gross') ? 'border-red-400 ring-1 ring-red-300' : ''}`} /></div></div>
                 <div className="space-y-2"><Label>Utarg netto <span className="text-xs text-slate-400 ml-1">{isNetManual ? '(ręcznie)' : '(auto)'}</span></Label>
                   <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
-                    <Input type="number" placeholder={gross > 0 ? netCalculated.toFixed(2) : '0,00'} value={salesForm.netRevenue}
-                      onChange={e => setSalesForm({...salesForm, netRevenue: e.target.value})} disabled={isReadOnly} className="bg-gray-50 h-12 text-lg pl-8" /></div>
-                  {!isNetManual && gross > 0 && <p className="text-xs text-slate-400">Auto: {fmt2(netCalculated)}</p>}
-                  {isNetManual && gross > 0 && Math.abs(netManual - netCalculated) > 1 && <p className="text-xs text-amber-600">⚠ Różnica: {fmt2(netManual - netCalculated)}</p>}</div>
+                    <Input
+                      type="number"
+                      placeholder={gross > 0 ? netAfterCosts.toFixed(2) : '0,00'}
+                      value={salesForm.netRevenue}
+                      onChange={e => setSalesForm({ ...salesForm, netRevenue: e.target.value })}
+                      disabled={isReadOnly}
+                      className="bg-gray-50 h-12 text-lg pl-8"
+                    /></div>
+                  {!isNetManual && gross > 0 && (
+                    <>
+                      <p className="text-xs text-slate-400">Auto (sprzedaż netto): {fmt2(netCalculated)}</p>
+                      <p className="text-xs text-slate-600">Po kosztach (praca + koszty ops): {fmt2(netAfterCosts)}</p>
+                    </>
+                  )}
+                  {isNetManual && gross > 0 && Math.abs(netManual - netCalculated) > 1 && (
+                    <p className="text-xs text-amber-600">⚠ Różnica vs sprzedaż netto: {fmt2(netManual - netCalculated)}</p>
+                  )}
+                </div>
                 <div className="space-y-2"><Label>Transakcje *{fieldErr('transactions') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
                   <Input type="number" placeholder="0" value={salesForm.transactions} onChange={e => setSalesForm({...salesForm, transactions: e.target.value})}
                     disabled={isReadOnly} className={`bg-gray-50 h-12 text-lg ${fieldErr('transactions') ? 'border-red-400 ring-1 ring-red-300' : ''}`} /></div>
@@ -957,8 +974,12 @@ export default function OpsDashboard() {
 
               <Card className="mb-8"><CardHeader className="pb-2"><CardTitle className="text-sm font-semibold text-slate-600">Podsumowanie sprzedaży</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-3 gap-4 text-sm">
-                  <div><p className="text-xs text-slate-500 uppercase">Netto</p><p className="text-xl font-bold">{fmt0(net)}</p>
-                    {isNetManual && <p className="text-xs text-blue-600">📝 Ręczne</p>}</div>
+                  <div>
+                    <p className="text-xs text-slate-500 uppercase">Netto (sprzedaż)</p>
+                    <p className="text-xl font-bold">{fmt0(net)}</p>
+                    <p className="text-xs text-slate-500">Po kosztach (praca + koszty ops): {fmt0(netAfterCosts)}</p>
+                    {isNetManual && <p className="text-xs text-blue-600">📝 Ręczne</p>}
+                  </div>
                   <div><p className="text-xs text-slate-500 uppercase">Śr. paragon</p><p className="text-xl font-bold">{fmt2(aov)}</p>
                     <p className="text-xs text-slate-500">Tx: {tx}</p></div>
                   <div><p className="text-xs text-slate-500 uppercase">Płatności</p>
