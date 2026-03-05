@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { AlertCircle, Package, Plus, Send, CheckCircle2, AlertTriangle, Truck, Loader2 } from 'lucide-react'
+import { AlertCircle, Package, Plus, Send, CheckCircle2, AlertTriangle, Truck, Loader2, RefreshCw } from 'lucide-react'
 
 interface StockItem {
   id: string
@@ -101,16 +101,20 @@ export function CentralWarehousePanel({
       const { data: ingData } = await supabase.from('ingredients').select('*').order('name')
       if (ingData) setIngredients(ingData)
 
+      // Fetch products
+      const { data: prodData } = await supabase.from('inventory_products').select('*').order('name')
+
       // Fetch locations
       const { data: locData } = await supabase.from('locations').select('*').order('name')
       if (locData) setLocations(locData)
 
-      // Calculate stock from transactions and ingredients
+      // Calculate stock from transactions - support both ingredients and products
       const stockMap = new Map<string, StockItem>()
       
+      // Add ingredients to stock map
       if (ingData) {
         ingData.forEach((ing: any) => {
-          stockMap.set(ing.id, {
+          stockMap.set(`ing_${ing.id}`, {
             id: ing.id,
             ingredient: ing.name,
             category: ing.category || 'Inne',
@@ -124,6 +128,23 @@ export function CentralWarehousePanel({
         })
       }
 
+      // Add products to stock map
+      if (prodData) {
+        prodData.forEach((prod: any) => {
+          stockMap.set(`prod_${prod.id}`, {
+            id: prod.id,
+            ingredient: prod.name,
+            category: prod.category || 'Produkty',
+            onHand: 0, // Will be calculated from transactions below
+            reserved: 0,
+            available: 0, // Will be calculated from transactions below
+            minThreshold: 0,
+            unit: prod.unit || 'szt',
+            value: 0, // Will be calculated from transactions below
+          })
+        })
+      }
+
       // Get inventory transactions for more accurate stock
       const { data: txData } = await supabase
         .from('inventory_transactions')
@@ -131,20 +152,44 @@ export function CentralWarehousePanel({
         .order('created_at', { ascending: false })
       
       if (txData) {
-        // Sum quantities by ingredient
-        const qtySums = new Map<string, number>()
+        console.log('📦 Loaded transactions:', txData.length)
+        // Sum quantities by ingredient_id and product_id
+        const ingredientQtySums = new Map<string, number>()
+        const productQtySums = new Map<string, number>()
+        
         txData.forEach((tx: any) => {
-          const current = qtySums.get(tx.ingredient_id) || 0
           const change = tx.tx_type === 'invoice_in' ? tx.quantity : -tx.quantity
-          qtySums.set(tx.ingredient_id, current + change)
+          
+          if (tx.ingredient_id) {
+            const current = ingredientQtySums.get(tx.ingredient_id) || 0
+            ingredientQtySums.set(tx.ingredient_id, current + change)
+          }
+          
+          if (tx.product_id) {
+            const current = productQtySums.get(tx.product_id) || 0
+            productQtySums.set(tx.product_id, current + change)
+            console.log(`  Product TX: ${tx.product_id} qty=${tx.quantity} type=${tx.tx_type}`)
+          }
         })
 
-        // Update stock items with calculated totals
-        qtySums.forEach((qty, ingId) => {
-          const item = stockMap.get(ingId)
+        console.log('📊 Product qty totals:', Array.from(productQtySums.entries()))
+
+        // Update ingredient stock items with calculated totals
+        ingredientQtySums.forEach((qty, ingId) => {
+          const item = stockMap.get(`ing_${ingId}`)
           if (item) {
             item.onHand = qty
             item.available = qty - item.reserved
+          }
+        })
+
+        // Update product stock items with calculated totals (FIX: use prod_ prefix to match the key)
+        productQtySums.forEach((qty, prodId) => {
+          const item = stockMap.get(`prod_${prodId}`)
+          if (item) {
+            item.onHand = qty
+            item.available = qty - item.reserved
+            console.log(`✅ Updated ${item.ingredient} to qty=${qty}`)
           }
         })
       }
@@ -459,10 +504,16 @@ export function CentralWarehousePanel({
                 <CardTitle>{warehouseName}</CardTitle>
                 <CardDescription>Obecny stan zapasów</CardDescription>
               </div>
-              <Button onClick={() => setShowDeliveryForm(true)} className="gap-2">
-                <Plus size={16} />
-                Odbierz dostawę
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={() => fetchData()} disabled={loading} variant="outline" size="sm" className="gap-2">
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                  Odśwież
+                </Button>
+                <Button onClick={() => setShowDeliveryForm(true)} className="gap-2">
+                  <Plus size={16} />
+                  Odbierz dostawę
+                </Button>
+              </div>
             </CardHeader>
 
             <CardContent>
