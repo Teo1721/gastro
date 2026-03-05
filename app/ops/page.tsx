@@ -7,6 +7,7 @@ import { OpsSidebar } from '@/components/OpsSidebar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import IngredientAutocomplete from '@/components/ingredient-autocomplete'
+import ProductAutocomplete from '@/components/product-autocomplete'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -33,6 +34,10 @@ type InvoiceLineItem = {
   unit: string; netPrice: string; vatRate: string
   ingredient_id?: string | null
 }
+type SemisLineItem = {
+  product: string; quantity: string; netPrice: string; vatRate: string
+  product_id?: string | null
+}
 type InventoryJob = {
   id: string; location_id: string; type: 'MONTHLY' | 'WEEKLY'
   status: 'draft' | 'submitted' | 'approved' | 'correction'
@@ -56,6 +61,29 @@ type SemisReconciliationEntry = {
   amount: string
   description: string
   status: 'pending' | 'submitted'
+}
+
+type DailyReportHistoryItem = {
+  id: string
+  date: string
+  gross_revenue: number | null
+  net_revenue: number | null
+  transaction_count: number | null
+  total_labor_hours: number | null
+  status: string | null
+  closing_person: string | null
+  closing_time: string | null
+}
+
+type InvoiceHistoryItem = {
+  id: string
+  invoice_type: 'COS' | 'SEMIS'
+  supplier_name: string
+  invoice_number: string
+  service_date: string
+  total_gross: number
+  status: string
+  created_at: string
 }
 
 type ActiveView = 'reporting' | 'invoices' | 'inventory'
@@ -123,6 +151,10 @@ const emptyLineItem: InvoiceLineItem = {
   product: '', cosCategory: '', quantity: '', unit: 'kg', netPrice: '', vatRate: '0.08'
 }
 
+const emptySemisLineItem: SemisLineItem = {
+  product: '', quantity: '', netPrice: '', vatRate: '0.08'
+}
+
 const emptySemisReconEntry: SemisReconciliationEntry = {
   location_id: '',
   invoice_number: '',
@@ -157,6 +189,7 @@ export default function OpsDashboard() {
   const [activeView, setActiveView] = useState<ActiveView>('reporting')
   const [reportDate, setReportDate] = useState('')
   const [isReadOnly, setIsReadOnly] = useState(false)
+  const [reportingSubView, setReportingSubView] = useState<'form' | 'history'>('form')
 
   // ── Closing person ──
   const [closingPersonName, setClosingPersonName] = useState('')
@@ -168,8 +201,8 @@ export default function OpsDashboard() {
 
   // ── Sales form ──
   const [salesForm, setSalesForm] = useState({
-    transactions: '', gross: '', netRevenue: '', card: '', cash: '',
-    comments: '', targetGross: '', targetTx: '', totalHoursAgg: '',
+    transactions: '', gross: '', netRevenue: '', card: '', cash: '', online: '',
+    comments: '', targetGross: '', targetTx: '', targetNetto: '', totalHoursAgg: '',
     avgRateAgg: '', cashReported: '', cashPhysical: '',
     pettyExpense: '', losses: '', refunds: '',
     incidentType: '', incidentDetails: '',
@@ -185,14 +218,18 @@ export default function OpsDashboard() {
     supplier: '', invoiceNumber: '', saleDate: '', receiptDate: '',
   })
   const [cosLineItems, setCosLineItems] = useState<InvoiceLineItem[]>([{ ...emptyLineItem }])
+  const [semisLineItems, setSemisLineItems] = useState<SemisLineItem[]>([{ ...emptySemisLineItem }])
   const [semisForm, setSemisForm] = useState({
-    totalNet: '', vatRate: '0.23', category: '', description: '',
+    category: '', description: '',
   })
+  const [cosWarehouseProducts, setCosWarehouseProducts] = useState<{product_id: string; product_name: string; quantity: string; netPrice: string; vatRate: string}[]>([])
+  const [warehouseProductsData, setWarehouseProductsData] = useState<{id: string; name: string; last_price: number | null}[]>([])
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [invoiceErrors, setInvoiceErrors] = useState<ValidationError[]>([])
   const [excelLoading, setExcelLoading] = useState(false)
-  const [invoiceSubView, setInvoiceSubView] = useState<'form' | 'semis_recon'>('form')
+  const [invoiceSubView, setInvoiceSubView] = useState<'form' | 'semis_recon' | 'history'>('form')
+  const [invoiceHistory, setInvoiceHistory] = useState<InvoiceHistoryItem[]>([])
 
   // ── SEMIS Reconciliation Entry ──
   const [semisReconEntries, setSemisReconEntries] = useState<SemisReconciliationEntry[]>([])
@@ -208,6 +245,7 @@ export default function OpsDashboard() {
   const [inventorySearch, setInventorySearch] = useState('')
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState('')
   const [inventorySaving, setInventorySaving] = useState(false)
+  const [reportHistory, setReportHistory] = useState<DailyReportHistoryItem[]>([])
 
   // ═══════════════════════════════════════════════════════════════════
   // FORMATTING
@@ -266,8 +304,9 @@ export default function OpsDashboard() {
           ...p,
           transactions: data.transaction_count ?? '', gross: data.gross_revenue ?? '',
           netRevenue: data.net_revenue ?? '', card: data.card_payments ?? '',
-          cash: data.cash_payments ?? '', comments: data.comments ?? '',
+          cash: data.cash_payments ?? '', online: data.online_sales ?? '', comments: data.comments ?? '',
           targetGross: data.target_gross_sales ?? '', targetTx: data.target_transactions ?? '',
+          targetNetto: data.target_net_sales ?? '',
           totalHoursAgg: data.total_labor_hours ?? '', avgRateAgg: data.avg_hourly_rate ?? '',
           cashReported: data.cash_reported ?? '', cashPhysical: data.cash_physical ?? '',
           pettyExpense: data.petty_expenses ?? '', losses: data.daily_losses ?? '',
@@ -282,8 +321,8 @@ export default function OpsDashboard() {
         setExistingReportId(data.id)
       } else {
         setSalesForm(p => ({
-          ...p, transactions: '', gross: '', netRevenue: '', card: '', cash: '',
-          comments: '', targetGross: '', targetTx: '', totalHoursAgg: '',
+          ...p, transactions: '', gross: '', netRevenue: '', card: '', cash: '', online: '',
+          comments: '', targetGross: '', targetTx: '', targetNetto: '', totalHoursAgg: '',
           avgRateAgg: '', cashReported: '', cashPhysical: '', pettyExpense: '',
           losses: '', refunds: '', incidentType: '', incidentDetails: '',
           staffMorning: '', staffAfternoon: '', staffEvening: '',
@@ -314,6 +353,22 @@ export default function OpsDashboard() {
     }
     fetch()
   }, [selectedLocation, reportDate, activeView, supabase])
+
+  // ═══════════════════════════════════════════════════════════════════
+  // LOAD: Daily report history
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!selectedLocation || activeView !== 'reporting' || reportingSubView !== 'history') return
+    const fetchHistory = async () => {
+      const { data } = await supabase.from('sales_daily')
+        .select('id, date, gross_revenue, net_revenue, transaction_count, total_labor_hours, status, closing_person, closing_time')
+        .eq('location_id', selectedLocation.location_id)
+        .order('date', { ascending: false })
+        .limit(60)
+      if (data) setReportHistory(data as DailyReportHistoryItem[])
+    }
+    fetchHistory()
+  }, [selectedLocation, activeView, reportingSubView, supabase])
 
   // ═══════════════════════════════════════════════════════════════════
   // LOAD: Inventory data
@@ -351,6 +406,20 @@ export default function OpsDashboard() {
   }, [selectedLocation, activeView, supabase, inventorySubView])
 
   // ═══════════════════════════════════════════════════════════════════
+  // LOAD: Warehouse products for COS invoices
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!selectedLocation) return
+    const fetchProducts = async () => {
+      const { data } = await supabase.from('inventory_products')
+        .select('id, name, last_price')
+        .order('name', { ascending: true })
+      if (data) setWarehouseProductsData(data)
+    }
+    fetchProducts()
+  }, [selectedLocation, supabase])
+
+  // ═══════════════════════════════════════════════════════════════════
   // LOAD: SEMIS Reconciliation entries
   // ═══════════════════════════════════════════════════════════════════
   useEffect(() => {
@@ -367,15 +436,33 @@ export default function OpsDashboard() {
   }, [selectedLocation, activeView, invoiceSubView, supabase])
 
   // ═══════════════════════════════════════════════════════════════════
+  // LOAD: Invoice history
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!selectedLocation || activeView !== 'invoices' || invoiceSubView !== 'history') return
+    const fetchHistory = async () => {
+      const { data } = await supabase.from('invoices')
+        .select('id, invoice_type, supplier_name, invoice_number, service_date, total_gross, status, created_at')
+        .eq('location_id', selectedLocation.location_id)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      if (data) setInvoiceHistory(data as InvoiceHistoryItem[])
+    }
+    fetchHistory()
+  }, [selectedLocation, activeView, invoiceSubView, supabase])
+
+  // ═══════════════════════════════════════════════════════════════════
   // DERIVED KPI VALUES
   // ═══════════════════════════════════════════════════════════════════
   const gross = Number(salesForm.gross) || 0
   const tx = Number(salesForm.transactions) || 0
   const card = Number(salesForm.card) || 0
   const cash = Number(salesForm.cash) || 0
+  const online = Number(salesForm.online) || 0
   const planGross = Number(salesForm.targetGross) || 0
   const planTx = Number(salesForm.targetTx) || 0
   const netManual = Number(salesForm.netRevenue) || 0
+  // Sprzedaż netto (bez VAT) – bazowa wartość dla raportów i analityki
   const netCalculated = gross > 0 ? gross / (1 + VAT_RATE) : 0
   const net = netManual > 0 ? netManual : netCalculated
   const isNetManual = netManual > 0
@@ -386,7 +473,7 @@ export default function OpsDashboard() {
   const pettyExpense = Number(salesForm.pettyExpense) || 0
   const lossesVal = Number(salesForm.losses) || 0
   const refundsVal = Number(salesForm.refunds) || 0
-  const dailyOpsTotal = pettyExpense + lossesVal + refundsVal
+  const dailyOpsTotal = refundsVal
   const planNet = planGross > 0 ? planGross / (1 + VAT_RATE) : 0
   const planRealisation = planNet > 0 ? net / planNet : 0
   const aov = tx > 0 ? net / tx : 0
@@ -405,6 +492,8 @@ export default function OpsDashboard() {
   const rateAgg = Number(salesForm.avgRateAgg) || 0
   const totalHours = employeeTotals.totalHours > 0 ? employeeTotals.totalHours : hoursAgg
   const laborCost = employeeTotals.totalCost > 0 ? employeeTotals.totalCost : hoursAgg * rateAgg
+  // Netto po kosztach: sprzedaż netto minus koszt pracy i koszty operacyjne (sekcja 7)
+  const netAfterCosts = net - laborCost - dailyOpsTotal
   const laborPercent = net > 0 ? laborCost / net : 0
   const salesPerHour = totalHours > 0 ? net / totalHours : 0
   const effectiveHourlyRate = totalHours > 0 ? laborCost / totalHours : 0
@@ -419,11 +508,20 @@ export default function OpsDashboard() {
   // Invoice calcs
   const getLineNet = (i: InvoiceLineItem) => (Number(i.quantity) || 0) * (Number(i.netPrice) || 0)
   const getLineGross = (i: InvoiceLineItem) => getLineNet(i) * (1 + (Number(i.vatRate) || 0))
+  const getWarehouseLineNet = (quantity: number, price: number) => quantity * price
+  const getWarehouseLineGross = (net: number, vatRate: number) => net * (1 + vatRate)
   const cosTotalNet = cosLineItems.reduce((s, i) => s + getLineNet(i), 0)
   const cosTotalGross = cosLineItems.reduce((s, i) => s + getLineGross(i), 0)
   const cosTotalVat = cosTotalGross - cosTotalNet
-  const semisTotalNet = Number(semisForm.totalNet) || 0
-  const semisTotalGross = semisTotalNet * (1 + (Number(semisForm.vatRate) || 0))
+  const cosWarehouseTotalNet = cosWarehouseProducts.reduce((s, i) => s + getWarehouseLineNet(Number(i.quantity) || 0, Number(i.netPrice) || 0), 0)
+  const cosWarehouseTotalGross = cosWarehouseProducts.reduce((s, i) => s + getWarehouseLineGross(getWarehouseLineNet(Number(i.quantity) || 0, Number(i.netPrice) || 0), Number(i.vatRate) || 0), 0)
+  const cosWarehouseTotalVat = cosWarehouseTotalGross - cosWarehouseTotalNet
+  
+  const getSemisLineNet = (i: SemisLineItem) => (Number(i.quantity) || 0) * (Number(i.netPrice) || 0)
+  const getSemisLineGross = (i: SemisLineItem) => getSemisLineNet(i) * (1 + (Number(i.vatRate) || 0))
+  const semisTotalNet = semisLineItems.reduce((s, i) => s + getSemisLineNet(i), 0)
+  const semisTotalGross = semisLineItems.reduce((s, i) => s + getSemisLineGross(i), 0)
+  const semisTotalVat = semisTotalGross - semisTotalNet
 
   // Inventory filtered items
   const filteredJobItems = useMemo(() => {
@@ -444,8 +542,8 @@ export default function OpsDashboard() {
   const validateReport = (): ValidationError[] => {
     const e: ValidationError[] = []
     if (!gross && !netManual) e.push({ field: 'gross', message: 'Utarg brutto lub netto jest wymagany.' })
-    if (gross > 0 && Math.abs(card + cash - gross) > 0.5)
-      e.push({ field: 'card_cash', message: `Karty + Gotówka ≠ Brutto. Różnica: ${fmt2(Math.abs(card + cash - gross))}` })
+    if (gross > 0 && Math.abs(card + cash + online - gross) > 0.5)
+      e.push({ field: 'card_cash', message: `Karty + Gotówka + Online ≠ Brutto. Różnica: ${fmt2(Math.abs(card + cash + online - gross))}` })
     if (net > 0 && tx <= 0) e.push({ field: 'transactions', message: 'Utarg > 0, ale brak transakcji.' })
     if (net > 0 && totalHours <= 0) e.push({ field: 'hours', message: 'Utarg > 0, ale brak godzin pracy.' })
     if (Math.abs(cashDiff) > 0.01 && !salesForm.cashDiffExplanation.trim())
@@ -468,14 +566,18 @@ export default function OpsDashboard() {
     if (!invoiceCommon.saleDate) e.push({ field: 'saleDate', message: 'Data sprzedaży wymagana.' })
     if (invoiceType === 'COS') {
       if (!invoiceFile) e.push({ field: 'file', message: 'Załącznik obowiązkowy dla COS.' })
-      const valid = cosLineItems.filter(i => i.product.trim() && Number(i.quantity) > 0 && Number(i.netPrice) > 0)
-      if (valid.length === 0) e.push({ field: 'lineItems', message: 'Dodaj min. jedną pozycję.' })
+      const validCos = cosLineItems.filter(i => i.product.trim() && Number(i.quantity) > 0 && Number(i.netPrice) > 0)
+      const validWarehouse = cosWarehouseProducts.filter(p => Number(p.quantity) > 0 && Number(p.netPrice) > 0)
+      if (validCos.length === 0 && validWarehouse.length === 0) {
+        e.push({ field: 'lineItems', message: 'Dodaj min. jedną pozycję (Krok 3 lub Krok 4).' })
+      }
       cosLineItems.forEach((i, idx) => {
         if (i.product.trim() && !i.cosCategory) e.push({ field: `lineItem_${idx}`, message: `Poz. ${idx + 1}: brak kategorii COS.` })
       })
     }
     if (invoiceType === 'SEMIS') {
-      if (!semisTotalNet) e.push({ field: 'semisAmount', message: 'Kwota netto wymagana.' })
+      const valid = semisLineItems.filter(i => i.product.trim() && Number(i.quantity) > 0 && Number(i.netPrice) > 0)
+      if (valid.length === 0) e.push({ field: 'lineItems', message: 'Dodaj min. jedną pozycję SEMIS.' })
       if (!semisForm.category) e.push({ field: 'semisCategory', message: 'Kategoria wymagana.' })
     }
     return e
@@ -499,7 +601,8 @@ export default function OpsDashboard() {
       date: reportDate, transaction_count: tx, gross_revenue: gross,
       net_revenue: net, card_payments: card, cash_payments: cash,
       comments: salesForm.comments, target_gross_sales: planGross,
-      target_transactions: planTx, total_labor_hours: totalHours,
+      target_transactions: planTx, target_net_sales: Number(salesForm.targetNetto) || 0,
+      total_labor_hours: totalHours,
       avg_hourly_rate: totalHours > 0 ? laborCost / totalHours : 0,
       status: 'submitted', cash_reported: cashReported, cash_physical: cashPhysical,
       cash_diff: cashDiff, petty_expenses: pettyExpense,
@@ -511,6 +614,7 @@ export default function OpsDashboard() {
       labor_explanation: salesForm.laborExplanation || null,
       sales_deviation_explanation: salesForm.salesDeviationExplanation || null,
       cash_diff_explanation: salesForm.cashDiffExplanation || null,
+      online_sales: Number(salesForm.online) || 0,
     }
 
     const q = existingReportId
@@ -572,6 +676,14 @@ export default function OpsDashboard() {
 
     if (invoiceType === 'COS') {
       const valid = cosLineItems.filter(i => i.product.trim() && Number(i.quantity) > 0 && Number(i.netPrice) > 0)
+      const warehouseValid = cosWarehouseProducts.filter(p => Number(p.quantity) > 0 && Number(p.netPrice) > 0)
+      const hasCosLines = valid.length > 0
+
+      // decide totals source: Krok 3 (COS lines) or Krok 4 (warehouse) if no Krok 3
+      const invoiceNet = hasCosLines ? cosTotalNet : cosWarehouseTotalNet
+      const invoiceGross = hasCosLines ? cosTotalGross : cosWarehouseTotalGross
+      const invoiceVat = invoiceGross - invoiceNet
+
       // build payloads for RPC
       const invoicePayload = {
         location_id: selectedLocation.location_id,
@@ -579,21 +691,45 @@ export default function OpsDashboard() {
         invoice_type: 'COS', supplier_name: invoiceCommon.supplier,
         invoice_number: invoiceCommon.invoiceNumber,
         service_date: invoiceCommon.saleDate, receipt_date: invoiceCommon.receiptDate,
-        total_net: cosTotalNet, total_vat: cosTotalVat, total_gross: cosTotalGross,
+        total_net: invoiceNet, total_vat: invoiceVat, total_gross: invoiceGross,
         payment_method: 'przelew', attachment_url: attachmentUrl, status: 'submitted'
       }
-      const itemsPayload = valid.map((i, idx) => ({
-        line_number: idx + 1,
-        product_name: i.product,
-        cos_category: i.cosCategory,
-        quantity: Number(i.quantity),
-        unit: i.unit,
-        net_price: Number(i.netPrice),
-        net_value: getLineNet(i),
-        vat_rate: Number(i.vatRate),
-        gross_value: getLineGross(i),
-        ingredient_id: (i as any).ingredient_id || ''
-      }))
+      let itemsPayload: any[] = []
+
+      if (hasCosLines) {
+        itemsPayload = valid.map((i, idx) => ({
+          line_number: idx + 1,
+          product_name: i.product,
+          cos_category: i.cosCategory,
+          quantity: Number(i.quantity),
+          unit: i.unit,
+          net_price: Number(i.netPrice),
+          net_value: getLineNet(i),
+          vat_rate: Number(i.vatRate),
+          gross_value: getLineGross(i),
+          ingredient_id: (i as any).ingredient_id || ''
+        }))
+      } else {
+        itemsPayload = warehouseValid.map((p, idx) => {
+          const qty = Number(p.quantity) || 0
+          const price = Number(p.netPrice) || 0
+          const vatRateNum = Number(p.vatRate) || 0
+          const netVal = getWarehouseLineNet(qty, price)
+          const grossVal = getWarehouseLineGross(netVal, vatRateNum)
+          return {
+            line_number: idx + 1,
+            product_name: p.product_name,
+            cos_category: null,
+            quantity: qty,
+            unit: 'szt',
+            net_price: price,
+            net_value: netVal,
+            vat_rate: vatRateNum,
+            gross_value: grossVal,
+            ingredient_id: null,
+          }
+        })
+      }
 
       const txsPayload = itemsPayload.filter(it => it.ingredient_id).map(it => ({
         ingredient_id: it.ingredient_id,
@@ -630,23 +766,197 @@ export default function OpsDashboard() {
         setUploading(false); return
       }
       invoiceId = rpcRes?.invoice_id || null
-      alert(`✅ Faktura COS zapisana (${valid.length} pozycji)`)
+      
+      // Helper function to ensure product exists in inventory_products
+      const ensureProduct = async (productName: string, unit: string, category: string, price: number) => {
+        if (!productName.trim()) return null
+        const { data: existing } = await supabase
+          .from('inventory_products')
+          .select('id')
+          .ilike('name', productName.trim())
+          .limit(1)
+          .maybeSingle()
+        if (existing) return existing.id
+
+        const { data: created, error: createErr } = await supabase
+          .from('inventory_products')
+          .insert({
+            name: productName.trim(),
+            unit: unit || 'szt',
+            category: category || 'inne',
+            is_food: true,
+            last_price: price || 0,
+            active: true,
+          })
+          .select('id')
+          .single()
+        
+        if (createErr) {
+          console.error('Error creating product:', createErr)
+          return null
+        }
+        return created?.id
+      }
+      
+      // Create warehouse transactions for COS products selected in Krok 4
+      if (invoiceId && cosWarehouseProducts.length > 0) {
+        const validProducts = cosWarehouseProducts.filter(p => Number(p.quantity) > 0 && Number(p.netPrice) > 0)
+        const warehouseTxs = []
+        
+        for (const p of validProducts) {
+          let productId = p.product_id
+          
+          if (!productId) {
+            productId = await ensureProduct(p.product_name, 'szt', 'inne', Number(p.netPrice))
+            if (productId) {
+              await supabase.from('invoice_items')
+                .update({ product_id: productId })
+                .eq('invoice_id', invoiceId)
+                .eq('product_name', p.product_name)
+            }
+          }
+          
+          if (productId) {
+            warehouseTxs.push({
+              ingredient_id: null,
+              product_id: productId,
+              location_id: selectedLocation.location_id,
+              tx_type: 'invoice_in',
+              quantity: Number(p.quantity),
+              unit: 'szt',
+              price: Number(p.netPrice),
+              reason: 'cos invoice warehouse addition',
+              invoice_id: invoiceId,
+              created_by: userId,
+              created_at: invoiceCommon.saleDate || new Date().toISOString()
+            })
+          }
+        }
+        
+        if (warehouseTxs.length > 0) {
+          const { error: txError } = await supabase.from('inventory_transactions').insert(warehouseTxs)
+          if (txError) {
+            console.error('❌ Error creating COS warehouse transactions:', txError)
+            alert('⚠️ Faktura zapisana, ale błąd przy tworzeniu transakcji magazynowych: ' + txError.message)
+          } else {
+            console.log('✅ COS transactions created:', warehouseTxs.length)
+          }
+        }
+      }
+      
+      const totalPositions = hasCosLines ? valid.length : warehouseValid.length
+      alert(`✅ Faktura COS zapisana (${totalPositions} pozycji)${cosWarehouseProducts.length > 0 ? ` + ${cosWarehouseProducts.length} produktów do magazynu` : ''}`)
     }
 
     if (invoiceType === 'SEMIS') {
-      const { data: inv, error: e } = await supabase.from('invoices').insert({
+      const valid = semisLineItems.filter(i => i.product.trim() && Number(i.quantity) > 0 && Number(i.netPrice) > 0)
+      const invoicePayload = {
         location_id: selectedLocation.location_id,
         company_id: selectedLocation.locations.company_id,
         invoice_type: 'SEMIS', supplier_name: invoiceCommon.supplier,
         invoice_number: invoiceCommon.invoiceNumber,
         service_date: invoiceCommon.saleDate, receipt_date: invoiceCommon.receiptDate,
-        total_net: semisTotalNet, total_vat: semisTotalGross - semisTotalNet,
-        total_gross: semisTotalGross, semis_category: semisForm.category,
+        total_net: semisTotalNet, total_vat: semisTotalVat, total_gross: semisTotalGross,
+        semis_category: semisForm.category,
         description: semisForm.description, payment_method: 'przelew',
         attachment_url: attachmentUrl, status: 'submitted',
-      }).select('id').single()
+      }
+      
+      const itemsPayload = valid.map((i, idx) => ({
+        line_number: idx + 1,
+        product_name: i.product,
+        quantity: Number(i.quantity),
+        net_price: Number(i.netPrice),
+        net_value: getSemisLineNet(i),
+        vat_rate: Number(i.vatRate),
+        gross_value: getSemisLineGross(i),
+        product_id: (i as any).product_id || ''
+      }))
+      
+      const { data: inv, error: e } = await supabase.from('invoices').insert(invoicePayload).select('id').single()
       if (e) { alert('Błąd: ' + e.message); setUploading(false); return }
-      invoiceId = inv?.id
+      
+      if (inv) {
+        invoiceId = inv.id
+        // Insert line items
+        await supabase.from('invoice_items').insert(
+          itemsPayload.map(it => ({ invoice_id: invoiceId, ...it }))
+        )
+        
+        // Helper function to ensure product exists in inventory_products
+        const ensureProduct = async (productName: string, unit: string, category: string, price: number) => {
+          if (!productName.trim()) return null
+          const { data: existing } = await supabase
+            .from('inventory_products')
+            .select('id')
+            .ilike('name', productName.trim())
+            .limit(1)
+            .maybeSingle()
+          if (existing) return existing.id
+
+          const { data: created, error: createErr } = await supabase
+            .from('inventory_products')
+            .insert({
+              name: productName.trim(),
+              unit: unit || 'szt',
+              category: category || 'semis',
+              is_food: true,
+              last_price: price || 0,
+              active: true,
+            })
+            .select('id')
+            .single()
+          
+          if (createErr) {
+            console.error('Error creating product for SEMIS:', createErr)
+            return null
+          }
+          return created?.id
+        }
+        
+        // Ensure products exist and update items with product_id
+        const productIdsMap = new Map<string, string>()
+        for (const item of itemsPayload) {
+          if ((item.product_id === '' || !item.product_id) && item.product_name) {
+            const productId = await ensureProduct(item.product_name, 'szt', 'semis', item.net_price)
+            if (productId) {
+              item.product_id = productId
+              productIdsMap.set(item.product_name, productId)
+              await supabase.from('invoice_items')
+                .update({ product_id: productId })
+                .eq('invoice_id', invoiceId)
+                .eq('product_name', item.product_name)
+            }
+          }
+        }
+        
+        // Create warehouse transactions for SEMIS items - ensure we use the updated product_id
+        const txs = itemsPayload
+          .filter(it => it.product_id && String(it.product_id).trim() !== '')
+          .map(it => ({
+            ingredient_id: null,
+            product_id: it.product_id,
+            location_id: selectedLocation.location_id,
+            tx_type: 'invoice_in',
+            quantity: it.quantity,
+            unit: 'szt',
+            price: it.net_price,
+            reason: 'invoice semis import',
+            invoice_id: invoiceId,
+            created_by: userId,
+            created_at: invoiceCommon.saleDate || new Date().toISOString()
+          }))
+        
+        if (txs.length > 0) {
+          const { error: txError } = await supabase.from('inventory_transactions').insert(txs)
+          if (txError) {
+            console.error('❌ Error creating SEMIS warehouse transactions:', txError)
+            alert('⚠️ Faktura zapisana, ale błąd przy tworzeniu transakcji magazynowych: ' + txError.message)
+          } else {
+            console.log('✅ SEMIS transactions created:', txs.length)
+          }
+        }
+      }
       alert('✅ Faktura SEMIS zapisana')
     }
 
@@ -667,7 +977,9 @@ export default function OpsDashboard() {
     setInvoiceType('')
     setInvoiceCommon({ supplier: '', invoiceNumber: '', saleDate: new Date().toISOString().split('T')[0], receiptDate: new Date().toISOString().split('T')[0] })
     setCosLineItems([{ ...emptyLineItem }])
-    setSemisForm({ totalNet: '', vatRate: '0.23', category: '', description: '' })
+    setSemisLineItems([{ ...emptySemisLineItem }])
+    setSemisForm({ category: '', description: '' })
+    setCosWarehouseProducts([])
     setInvoiceFile(null); setInvoiceErrors([]); setUploading(false)
   }
 
@@ -863,6 +1175,10 @@ export default function OpsDashboard() {
   const removeCosLine = (i: number) => setCosLineItems(p => p.length > 1 ? p.filter((_, idx) => idx !== i) : p)
   const updateCosLine = (i: number, f: keyof InvoiceLineItem, v: string) =>
     setCosLineItems(p => { const c = [...p]; c[i] = { ...c[i], [f]: v }; return c })
+  const addSemisLine = () => setSemisLineItems(p => [...p, { ...emptySemisLineItem }])
+  const removeSemisLine = (i: number) => setSemisLineItems(p => p.length > 1 ? p.filter((_, idx) => idx !== i) : p)
+  const updateSemisLine = (i: number, f: keyof SemisLineItem, v: string) =>
+    setSemisLineItems(p => { const c = [...p]; c[i] = { ...c[i], [f]: v }; return c })
 
   // ═══════════════════════════════════════════════════════════════════
   // RENDER
@@ -901,9 +1217,17 @@ export default function OpsDashboard() {
         {/* ╚══════════════════════════════════════════════════════════╝ */}
         {activeView === 'reporting' && (
           <div className="max-w-4xl">
-            <header className="mb-8"><h1 className="text-3xl font-bold text-gray-900">Raport dzienny</h1></header>
+            <header className="mb-6">
+              <h1 className="text-3xl font-bold text-gray-900">Raport dzienny</h1>
+              <div className="flex gap-2 mt-4">
+                <Button variant={reportingSubView === 'form' ? 'default' : 'outline'} onClick={() => setReportingSubView('form')}>
+                  <FileText className="w-4 h-4 mr-2" />Formularz</Button>
+                <Button variant={reportingSubView === 'history' ? 'default' : 'outline'} onClick={() => setReportingSubView('history')}>
+                  <Clock className="w-4 h-4 mr-2" />Historia</Button>
+              </div>
+            </header>
 
-            {validationErrors.length > 0 && (
+            {reportingSubView === 'form' && validationErrors.length > 0 && (
               <div className="mb-6 bg-red-50 border-2 border-red-300 rounded-lg p-5">
                 <div className="flex items-center gap-2 mb-3"><ShieldAlert className="w-6 h-6 text-red-600" />
                   <h3 className="font-bold text-red-800 text-lg">Nie można zapisać ({validationErrors.length} błędów)</h3></div>
@@ -913,6 +1237,7 @@ export default function OpsDashboard() {
               </div>
             )}
 
+            {reportingSubView === 'form' && (
             <div className="bg-white border border-gray-300 rounded-sm shadow-sm p-8">
               {/* Header */}
               <div className="flex flex-wrap items-center justify-between gap-4 mb-8 bg-slate-50 border border-slate-200 rounded p-4">
@@ -925,21 +1250,37 @@ export default function OpsDashboard() {
 
               {/* S1: Sprzedaż */}
               <h3 className="font-bold text-lg text-gray-900 mb-4 border-b pb-2">1. Sprzedaż rzeczywista</h3>
-              <div className="grid grid-cols-2 gap-x-12 gap-y-6 mb-6">
+              <div className="grid grid-cols-3 gap-6 mb-6">
                 <div className="space-y-2"><Label>Utarg brutto *{fieldErr('gross') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
                   <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
                     <Input type="number" placeholder="0,00" value={salesForm.gross} onChange={e => setSalesForm({...salesForm, gross: e.target.value})}
                       disabled={isReadOnly} className={`bg-gray-50 h-12 text-lg pl-8 ${fieldErr('gross') ? 'border-red-400 ring-1 ring-red-300' : ''}`} /></div></div>
                 <div className="space-y-2"><Label>Utarg netto <span className="text-xs text-slate-400 ml-1">{isNetManual ? '(ręcznie)' : '(auto)'}</span></Label>
                   <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
-                    <Input type="number" placeholder={gross > 0 ? netCalculated.toFixed(2) : '0,00'} value={salesForm.netRevenue}
-                      onChange={e => setSalesForm({...salesForm, netRevenue: e.target.value})} disabled={isReadOnly} className="bg-gray-50 h-12 text-lg pl-8" /></div>
-                  {!isNetManual && gross > 0 && <p className="text-xs text-slate-400">Auto: {fmt2(netCalculated)}</p>}
-                  {isNetManual && gross > 0 && Math.abs(netManual - netCalculated) > 1 && <p className="text-xs text-amber-600">⚠ Różnica: {fmt2(netManual - netCalculated)}</p>}</div>
+                    <Input
+                      type="number"
+                      placeholder={gross > 0 ? netAfterCosts.toFixed(2) : '0,00'}
+                      value={salesForm.netRevenue}
+                      onChange={e => setSalesForm({ ...salesForm, netRevenue: e.target.value })}
+                      disabled={isReadOnly}
+                      className="bg-gray-50 h-12 text-lg pl-8"
+                    /></div>
+                  {!isNetManual && gross > 0 && (
+                    <>
+                      <p className="text-xs text-slate-400">Auto (sprzedaż netto): {fmt2(netCalculated)}</p>
+                      <p className="text-xs text-slate-600">Po kosztach (praca + koszty ops): {fmt2(netAfterCosts)}</p>
+                    </>
+                  )}
+                  {isNetManual && gross > 0 && Math.abs(netManual - netCalculated) > 1 && (
+                    <p className="text-xs text-amber-600">⚠ Różnica vs sprzedaż netto: {fmt2(netManual - netCalculated)}</p>
+                  )}
+                </div>
                 <div className="space-y-2"><Label>Transakcje *{fieldErr('transactions') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
                   <Input type="number" placeholder="0" value={salesForm.transactions} onChange={e => setSalesForm({...salesForm, transactions: e.target.value})}
                     disabled={isReadOnly} className={`bg-gray-50 h-12 text-lg ${fieldErr('transactions') ? 'border-red-400 ring-1 ring-red-300' : ''}`} /></div>
-                <div />
+              </div>
+
+              <div className="grid grid-cols-3 gap-6 mb-6">
                 <div className="space-y-2"><Label>Karty{fieldErr('card_cash') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
                   <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
                     <Input type="number" placeholder="0,00" value={salesForm.card} onChange={e => setSalesForm({...salesForm, card: e.target.value})}
@@ -948,17 +1289,37 @@ export default function OpsDashboard() {
                   <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
                     <Input type="number" placeholder="0,00" value={salesForm.cash} onChange={e => setSalesForm({...salesForm, cash: e.target.value})}
                       disabled={isReadOnly} className={`bg-gray-50 h-12 text-lg pl-8 ${fieldErr('card_cash') ? 'border-red-400' : ''}`} /></div></div>
+                <div className="space-y-2"><Label>Online{fieldErr('card_cash') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
+                  <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
+                    <Input type="number" placeholder="0,00" value={salesForm.online} onChange={e => setSalesForm({...salesForm, online: e.target.value})}
+                      disabled={isReadOnly} className={`bg-gray-50 h-12 text-lg pl-8 ${fieldErr('card_cash') ? 'border-red-400' : ''}`} /></div></div>
               </div>
 
-              {gross > 0 && Math.abs(card + cash - gross) > 0.5 && (
-                <div className="mb-4 bg-yellow-50 border border-yellow-300 text-yellow-800 p-3 rounded flex items-center gap-2 text-sm">
-                  <AlertTriangle className="w-4 h-4" />Karty + Gotówka = {fmt2(card + cash)} ≠ Brutto {fmt2(gross)}</div>
+              {gross > 0 && (
+                <div className={`mb-4 p-4 rounded border-2 ${Math.abs(card + cash + online - gross) > 0.5 ? 'bg-red-50 border-red-400' : 'bg-green-50 border-green-400'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold">
+                      {Math.abs(card + cash + online - gross) > 0.5 ? '❌ Suma płatności ≠ Utarg brutto' : '✅ Suma płatności = Utarg brutto'}
+                    </span>
+                    <span className="text-lg font-bold">
+                      {fmt2(card + cash + online)} 
+                      <span className={Math.abs(card + cash + online - gross) > 0.5 ? 'text-red-700' : 'text-green-700'}> ≠ {fmt2(gross)}</span>
+                    </span>
+                  </div>
+                  {Math.abs(card + cash + online - gross) > 0.5 && (
+                    <p className="text-sm text-red-700 mt-2">Różnica: {fmt2(Math.abs(card + cash + online - gross))}</p>
+                  )}
+                </div>
               )}
 
               <Card className="mb-8"><CardHeader className="pb-2"><CardTitle className="text-sm font-semibold text-slate-600">Podsumowanie sprzedaży</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-3 gap-4 text-sm">
-                  <div><p className="text-xs text-slate-500 uppercase">Netto</p><p className="text-xl font-bold">{fmt0(net)}</p>
-                    {isNetManual && <p className="text-xs text-blue-600">📝 Ręczne</p>}</div>
+                  <div>
+                    <p className="text-xs text-slate-500 uppercase">Netto (sprzedaż)</p>
+                    <p className="text-xl font-bold">{fmt0(net)}</p>
+                    <p className="text-xs text-slate-500">Po kosztach (praca + koszty ops): {fmt0(netAfterCosts)}</p>
+                    {isNetManual && <p className="text-xs text-blue-600">📝 Ręczne</p>}
+                  </div>
                   <div><p className="text-xs text-slate-500 uppercase">Śr. paragon</p><p className="text-xl font-bold">{fmt2(aov)}</p>
                     <p className="text-xs text-slate-500">Tx: {tx}</p></div>
                   <div><p className="text-xs text-slate-500 uppercase">Płatności</p>
@@ -969,7 +1330,7 @@ export default function OpsDashboard() {
               {/* S2: Plan */}
               <h3 className="font-bold text-lg text-gray-900 mb-4 border-b pb-2">2. Plan vs wykonanie</h3>
               <div className="grid grid-cols-2 gap-6 mb-4 bg-gray-50 p-6 rounded border border-gray-200">
-                <div className="space-y-2"><Label>Plan brutto</Label><Input type="number" placeholder="0" value={salesForm.targetGross} onChange={e => setSalesForm({...salesForm, targetGross: e.target.value})} disabled={isReadOnly} className="bg-white" /></div>
+                <div className="space-y-2"><Label>Plan netto</Label><Input type="number" placeholder="0" value={salesForm.targetNetto} onChange={e => setSalesForm({...salesForm, targetNetto: e.target.value})} disabled={isReadOnly} className="bg-white" /></div>
                 <div className="space-y-2"><Label>Plan transakcji</Label><Input type="number" placeholder="0" value={salesForm.targetTx} onChange={e => setSalesForm({...salesForm, targetTx: e.target.value})} disabled={isReadOnly} className="bg-white" /></div>
               </div>
 
@@ -1047,13 +1408,22 @@ export default function OpsDashboard() {
                     disabled={isReadOnly} placeholder="Przyczyna…" className="w-full min-h-[60px] rounded-md border border-input bg-white px-3 py-2 text-sm" /></div>
               )}
 
-              {/* S7: Koszty ops */}
+              {/* S7: Koszty operacyjne */}
               <h3 className="font-bold text-lg text-gray-900 mb-4 border-b pb-2">7. Koszty operacyjne</h3>
-              <Card className="mb-8"><CardContent className="grid grid-cols-4 gap-4 pt-4 text-sm">
-                {[['pettyExpense', 'Wydatki drobne'], ['losses', 'Straty'], ['refunds', 'Zwroty']].map(([k, l]) => (
-                  <div key={k} className="space-y-2"><Label>{l as string}</Label><Input type="number" placeholder="0" value={(salesForm as any)[k]}
-                    onChange={e => setSalesForm({...salesForm, [k]: e.target.value})} disabled={isReadOnly} className="bg-gray-50" /></div>
-                ))}<div className="space-y-2"><Label>Suma</Label><p className="h-10 flex items-center font-bold">{fmt2(dailyOpsTotal)}</p></div>
+              <Card className="mb-8"><CardContent className="space-y-4 pt-4 text-sm">
+                <div className="grid grid-cols-2 gap-4">
+                  {[['pettyExpense', 'Wydatki drobne (dla admin)'], ['losses', 'Straty (dla admin)']].map(([k, l]) => (
+                    <div key={k} className="space-y-2"><Label className="text-xs text-slate-500">{l as string}</Label><Input type="number" placeholder="0" value={(salesForm as any)[k]}
+                      onChange={e => setSalesForm({...salesForm, [k]: e.target.value})} disabled={isReadOnly} className="bg-gray-50" /></div>
+                  ))}
+                </div>
+                <div className="border-t pt-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2"><Label className="font-semibold text-red-700">Zwroty (zmniejsza utarg netto)</Label><Input type="number" placeholder="0" value={salesForm.refunds}
+                      onChange={e => setSalesForm({...salesForm, refunds: e.target.value})} disabled={isReadOnly} className="bg-red-50 border-red-300 h-12 text-lg font-bold" /></div>
+                    <div className="space-y-2"><Label>Razem do odjęcia</Label><p className="h-12 flex items-center font-bold text-lg text-red-700">{fmt2(dailyOpsTotal)}</p></div>
+                  </div>
+                </div>
               </CardContent></Card>
 
               {/* S8: Zdarzenia */}
@@ -1080,6 +1450,49 @@ export default function OpsDashboard() {
                 </div>
               )}
             </div>
+            )}
+
+            {reportingSubView === 'history' && (
+              <div className="bg-white border border-gray-300 rounded-sm shadow-sm p-6">
+                {reportHistory.length === 0 ? (
+                  <p className="text-sm text-slate-500">Brak zapisanych raportów dla tej lokalizacji.</p>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-slate-600">Ostatnie {reportHistory.length} raportów dziennych</p>
+                    </div>
+                    <div className="border rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50">
+                          <tr className="border-b text-left text-xs text-slate-500 uppercase">
+                            <th className="py-2 px-3">Data</th>
+                            <th className="px-3 text-right">Brutto</th>
+                            <th className="px-3 text-right">Netto</th>
+                            <th className="px-3 text-right">Transakcje</th>
+                            <th className="px-3 text-right">Godziny</th>
+                            <th className="px-3">Status</th>
+                            <th className="px-3">Zamykający</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reportHistory.map(r => (
+                            <tr key={r.id} className="border-b hover:bg-gray-50">
+                              <td className="py-2 px-3 font-medium">{r.date}</td>
+                              <td className="px-3 text-right">{fmt2(Number(r.gross_revenue || 0))}</td>
+                              <td className="px-3 text-right">{fmt2(Number(r.net_revenue || 0))}</td>
+                              <td className="px-3 text-right">{r.transaction_count ?? '—'}</td>
+                              <td className="px-3 text-right">{r.total_labor_hours != null ? r.total_labor_hours.toFixed(1) : '—'}</td>
+                              <td className="px-3 text-xs uppercase text-slate-600">{r.status || '—'}</td>
+                              <td className="px-3 text-xs text-slate-500">{r.closing_person || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1095,6 +1508,8 @@ export default function OpsDashboard() {
                   <FileText className="w-4 h-4 mr-2" />Nowa faktura</Button>
                 <Button variant={invoiceSubView === 'semis_recon' ? 'default' : 'outline'} onClick={() => setInvoiceSubView('semis_recon')}>
                   <RefreshCw className="w-4 h-4 mr-2" />Uzgodnienie SEMIS</Button>
+                <Button variant={invoiceSubView === 'history' ? 'default' : 'outline'} onClick={() => setInvoiceSubView('history')}>
+                  <Clock className="w-4 h-4 mr-2" />Historia</Button>
               </div>
             </header>
 
@@ -1148,8 +1563,9 @@ export default function OpsDashboard() {
 
                     {/* COS Line Items */}
                     {invoiceType === 'COS' && (
-                      <Card className={`mb-6 ${invErr('lineItems') ? 'border-red-400' : ''}`}>
-                        <CardHeader><CardTitle>Krok 3 — Pozycje (COS)</CardTitle></CardHeader>
+                      <>
+                        <Card className={`mb-6 ${invErr('lineItems') ? 'border-red-400' : ''}`}>
+                          <CardHeader><CardTitle>Krok 3 — Pozycje (COS)</CardTitle></CardHeader>
                         <CardContent className="space-y-4">
                           <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 border-b pb-2">
                             <div className="col-span-2">Produkt</div><div className="col-span-2">Kategoria</div>
@@ -1182,38 +1598,159 @@ export default function OpsDashboard() {
                               <div className="col-span-1 flex justify-end"><Button variant="ghost" size="icon" onClick={() => removeCosLine(i)} className="h-8 w-8 text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></Button></div>
                             </div>))}
                           <Button variant="outline" size="sm" onClick={addCosLine}><Plus className="w-4 h-4 mr-1" />Dodaj pozycję</Button>
-                          <div className="border-t-2 pt-4 mt-4 grid grid-cols-3 gap-4">
-                            <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">Netto</p><p className="text-xl font-bold">{fmt2(cosTotalNet)}</p></div>
-                            <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">VAT</p><p className="text-xl font-bold">{fmt2(cosTotalVat)}</p></div>
-                            <div className="bg-blue-50 rounded p-3 border border-blue-200"><p className="text-xs text-blue-600 uppercase font-semibold">Brutto</p><p className="text-xl font-bold text-blue-800">{fmt2(cosTotalGross)}</p></div>
-                          </div>
                         </CardContent></Card>
+
+                        {/* Krok 4: Add products to warehouse for COS */}
+                        <Card className="mb-6"><CardHeader><CardTitle>Krok 4 — Produkty do magazynu (z ceną)</CardTitle></CardHeader>
+                          <CardContent className="space-y-4">
+                            <p className="text-sm text-slate-500">Wybierz produkty z magazynu lub dodaj z Krok 3. Każda pozycja będzie dodana do stanu magazynowego z ceną i VAT.</p>
+                            <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 border-b pb-2">
+                              <div className="col-span-3">Produkt</div><div className="col-span-1 text-right">Ilość</div>
+                              <div className="col-span-2 text-right">Cena netto</div><div className="col-span-2 text-right">Netto</div>
+                              <div className="col-span-1">VAT</div><div className="col-span-2 text-right">Brutto</div><div className="col-span-1" /></div>
+                            
+                            {cosWarehouseProducts.map((item, i) => {
+                              const qty = Number(item.quantity) || 0
+                              const price = Number(item.netPrice) || 0
+                              const vat = Number(item.vatRate) || 0
+                              const lineNet = getWarehouseLineNet(qty, price)
+                              const lineGross = getWarehouseLineGross(lineNet, vat)
+                              return (
+                                <div key={i} className="grid grid-cols-12 gap-2 items-center text-sm">
+                                  <div className="col-span-3 text-sm font-medium">{item.product_name}</div>
+                                  <div className="col-span-1"><Input type="number" value={item.quantity} onChange={e => {
+                                    const p = [...cosWarehouseProducts]; p[i].quantity = e.target.value; setCosWarehouseProducts(p)
+                                  }} className="h-9 text-right" placeholder="0" /></div>
+                                  <div className="col-span-2"><Input type="number" value={item.netPrice} onChange={e => {
+                                    const p = [...cosWarehouseProducts]; p[i].netPrice = e.target.value; setCosWarehouseProducts(p)
+                                  }} className="h-9 text-right" placeholder="0.00" step="0.01" /></div>
+                                  <div className="col-span-2 text-right font-medium">{lineNet > 0 ? fmt2(lineNet) : '—'}</div>
+                                  <div className="col-span-1"><select value={item.vatRate} onChange={e => {
+                                    const p = [...cosWarehouseProducts]; p[i].vatRate = e.target.value; setCosWarehouseProducts(p)
+                                  }} className="h-9 w-full rounded-md border border-input bg-background px-1 text-xs">
+                                    {VAT_RATES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                                  </select></div>
+                                  <div className="col-span-2 text-right font-medium">{lineGross > 0 ? fmt2(lineGross) : '—'}</div>
+                                  <div className="col-span-1 flex justify-end"><Button variant="ghost" size="icon" onClick={() => {
+                                    setCosWarehouseProducts(cosWarehouseProducts.filter((_, idx) => idx !== i))
+                                  }} className="h-8 w-8 text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></Button></div>
+                                </div>
+                              )
+                            })}
+                            
+                            <div className="mt-4 pt-4 border-t space-y-3">
+                              <div className="grid grid-cols-3 gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const item = cosLineItems[cosLineItems.length - 1]
+                                    if (item && item.product && item.netPrice) {
+                                      setCosWarehouseProducts([...cosWarehouseProducts, {
+                                        product_id: '',
+                                        product_name: item.product,
+                                        quantity: item.quantity,
+                                        netPrice: item.netPrice,
+                                        vatRate: item.vatRate
+                                      }])
+                                    } else {
+                                      alert('Dodaj pozycję w Krok 3 najpierw')
+                                    }
+                                  }}
+                                  className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-center gap-2"
+                                >
+                                  <Plus className="w-4 h-4" />Z Krok 3
+                                </button>
+                                <select
+                                  id="cosWarehouseProductSelect"
+                                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                                  defaultValue=""
+                                >
+                                  <option value="">– wybierz produkt z magazynu –</option>
+                                  {warehouseProductsData.map(p => <option key={p.id} value={p.id}>{p.name} ({p.last_price ? fmt2(p.last_price) : 'brak ceny'})</option>)}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const selectEl = document.getElementById('cosWarehouseProductSelect') as HTMLSelectElement
+                                    if (selectEl && selectEl.value) {
+                                      const selected = warehouseProductsData.find(p => p.id === selectEl.value)
+                                      if (selected) {
+                                        setCosWarehouseProducts([...cosWarehouseProducts, {
+                                          product_id: selected.id,
+                                          product_name: selected.name,
+                                          quantity: '',
+                                          netPrice: String(selected.last_price || 0),
+                                          vatRate: '0.08'
+                                        }])
+                                        selectEl.value = ''
+                                      }
+                                    }
+                                  }}
+                                  className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-center gap-2"
+                                >
+                                  <Plus className="w-4 h-4" />Dodaj
+                                </button>
+                              </div>
+                            </div>
+                            <div className="border-t-2 pt-4 mt-4 grid grid-cols-3 gap-4">
+                              <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">Netto</p><p className="text-xl font-bold">{fmt2(cosWarehouseTotalNet)}</p></div>
+                              <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">VAT</p><p className="text-xl font-bold">{fmt2(cosWarehouseTotalVat)}</p></div>
+                              <div className="bg-blue-50 rounded p-3 border border-blue-200"><p className="text-xs text-blue-600 uppercase font-semibold">Brutto</p><p className="text-xl font-bold text-blue-800">{fmt2(cosWarehouseTotalGross)}</p></div>
+                            </div>
+                          </CardContent></Card>
+                      </>
                     )}
 
                     {/* SEMIS Form */}
                     {invoiceType === 'SEMIS' && (
-                      <Card className="mb-6"><CardHeader><CardTitle>Krok 3 — Koszt (SEMIS)</CardTitle></CardHeader>
-                        <CardContent className="space-y-6">
-                          <div className="grid grid-cols-2 gap-6">
-                            <div className="space-y-2"><Label>Kwota netto *{invErr('semisAmount') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
-                              <div className="relative"><span className="absolute left-3 top-3 text-gray-400">zł</span>
-                                <Input type="number" placeholder="0,00" value={semisForm.totalNet} onChange={e => setSemisForm({...semisForm, totalNet: e.target.value})} className={`pl-8 h-12 text-lg ${invErr('semisAmount') ? 'border-red-400' : ''}`} /></div></div>
-                            <div className="space-y-2"><Label>VAT</Label>
-                              <select value={semisForm.vatRate} onChange={e => setSemisForm({...semisForm, vatRate: e.target.value})} className="h-12 w-full rounded-md border border-input bg-background px-3">
-                                {VAT_RATES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}</select></div>
-                          </div>
-                          <div className="space-y-2"><Label>Kategoria *{invErr('semisCategory') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
-                            <select value={semisForm.category} onChange={e => setSemisForm({...semisForm, category: e.target.value})}
-                              className={`h-10 w-full rounded-md border ${invErr('semisCategory') ? 'border-red-400' : 'border-input'} bg-background px-3 text-sm`}>
-                              <option value="">– wybierz –</option>{SEMIS_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}</select></div>
-                          <textarea value={semisForm.description} onChange={e => setSemisForm({...semisForm, description: e.target.value})}
-                            placeholder="Opis…" className="w-full min-h-[60px] rounded-md border border-input bg-gray-50 px-3 py-2 text-sm" />
-                          <div className="grid grid-cols-3 gap-4">
-                            <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">Netto</p><p className="text-xl font-bold">{fmt2(semisTotalNet)}</p></div>
-                            <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">VAT</p><p className="text-xl font-bold">{fmt2(semisTotalGross - semisTotalNet)}</p></div>
-                            <div className="bg-emerald-50 rounded p-3 border border-emerald-200"><p className="text-xs text-emerald-600 uppercase font-semibold">Brutto</p><p className="text-xl font-bold text-emerald-800">{fmt2(semisTotalGross)}</p></div>
-                          </div>
-                        </CardContent></Card>
+                      <>
+                        <Card className={`mb-6 ${invErr('lineItems') ? 'border-red-400' : ''}`}>
+                          <CardHeader><CardTitle>Krok 3 — Pozycje (SEMIS)</CardTitle></CardHeader>
+                          <CardContent className="space-y-4">
+                            <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 border-b pb-2">
+                              <div className="col-span-3">Produkt</div>
+                              <div className="col-span-2 text-right">Ilość</div><div className="col-span-2 text-right">Cena</div>
+                              <div className="col-span-2 text-right">Netto</div>
+                              <div className="col-span-1">VAT</div><div className="col-span-1 text-right">Brutto</div><div className="col-span-1" /></div>
+                            {semisLineItems.map((item, i) => (
+                              <div key={i} className="grid grid-cols-12 gap-2 items-center text-sm">
+                                <div className="col-span-3">
+                                  <ProductAutocomplete
+                                    value={item.product}
+                                    onChange={(v) => updateSemisLine(i, 'product', v)}
+                                    onSelect={(prod) => {
+                                      // set both product name and product_id
+                                      setSemisLineItems(p => { const c = [...p]; c[i] = { ...c[i], product: prod.name, product_id: prod.id }; return c })
+                                    }}
+                                  />
+                                </div>
+                                <div className="col-span-2"><Input type="number" value={item.quantity} onChange={e => updateSemisLine(i, 'quantity', e.target.value)} className="h-9 text-right" /></div>
+                                <div className="col-span-2"><Input type="number" value={item.netPrice} onChange={e => updateSemisLine(i, 'netPrice', e.target.value)} className="h-9 text-right" /></div>
+                                <div className="col-span-2 text-right text-slate-700 font-medium">{getSemisLineNet(item) > 0 ? fmt2(getSemisLineNet(item)) : '—'}</div>
+                                <div className="col-span-1"><select value={item.vatRate} onChange={e => updateSemisLine(i, 'vatRate', e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-1 text-xs">
+                                  {VAT_RATES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}</select></div>
+                                <div className="col-span-1 text-right font-medium">{getSemisLineGross(item) > 0 ? fmt2(getSemisLineGross(item)) : '—'}</div>
+                                <div className="col-span-1 flex justify-end"><Button variant="ghost" size="icon" onClick={() => removeSemisLine(i)} className="h-8 w-8 text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></Button></div>
+                              </div>))}
+                            <Button variant="outline" size="sm" onClick={addSemisLine}><Plus className="w-4 h-4 mr-1" />Dodaj pozycję</Button>
+                            <div className="border-t-2 pt-4 mt-4 grid grid-cols-3 gap-4">
+                              <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">Netto</p><p className="text-xl font-bold">{fmt2(semisTotalNet)}</p></div>
+                              <div className="bg-slate-50 rounded p-3"><p className="text-xs text-slate-500 uppercase">VAT</p><p className="text-xl font-bold">{fmt2(semisTotalVat)}</p></div>
+                              <div className="bg-emerald-50 rounded p-3 border border-emerald-200"><p className="text-xs text-emerald-600 uppercase font-semibold">Brutto</p><p className="text-xl font-bold text-emerald-800">{fmt2(semisTotalGross)}</p></div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card className="mb-6"><CardHeader><CardTitle>Krok 4 — Kategoria i opis</CardTitle></CardHeader>
+                          <CardContent className="space-y-6">
+                            <div className="space-y-2"><Label>Kategoria *{invErr('semisCategory') && <span className="text-red-500 text-xs ml-1">⚠</span>}</Label>
+                              <select value={semisForm.category} onChange={e => setSemisForm({...semisForm, category: e.target.value})}
+                                className={`h-10 w-full rounded-md border ${invErr('semisCategory') ? 'border-red-400' : 'border-input'} bg-background px-3 text-sm`}>
+                                <option value="">– wybierz –</option>{SEMIS_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}</select></div>
+                            <textarea value={semisForm.description} onChange={e => setSemisForm({...semisForm, description: e.target.value})}
+                              placeholder="Opis…" className="w-full min-h-[60px] rounded-md border border-input bg-gray-50 px-3 py-2 text-sm" />
+                          </CardContent></Card>
+                      </>
                     )}
 
                     <div className="flex justify-end mb-8">
@@ -1379,6 +1916,55 @@ export default function OpsDashboard() {
                         <RefreshCw className="w-12 h-12 mx-auto mb-3 opacity-30" />
                         <p>Brak pozycji do wysłania</p>
                         <p className="text-sm mt-1">Dodaj pozycje używając formularza powyżej</p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* ── Invoice history ── */}
+            {invoiceSubView === 'history' && (
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock className="w-5 h-5" />Historia wysłanych faktur
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {invoiceHistory.length === 0 ? (
+                      <p className="text-sm text-slate-500">Brak wysłanych faktur dla tej lokalizacji.</p>
+                    ) : (
+                      <div className="border rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50">
+                            <tr className="border-b text-left text-xs text-slate-500 uppercase">
+                              <th className="py-2 px-3">Typ</th>
+                              <th className="px-3">Nr faktury</th>
+                              <th className="px-3">Dostawca</th>
+                              <th className="px-3">Data sprzedaży</th>
+                              <th className="px-3 text-right">Brutto</th>
+                              <th className="px-3">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {invoiceHistory.map(inv => (
+                              <tr key={inv.id} className="border-b hover:bg-gray-50">
+                                <td className="py-2 px-3">
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${inv.invoice_type === 'COS' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                                    {inv.invoice_type === 'COS' ? 'COS (magazyn)' : 'SEMIS (koszt)'}
+                                  </span>
+                                </td>
+                                <td className="px-3 font-medium">{inv.invoice_number}</td>
+                                <td className="px-3">{inv.supplier_name}</td>
+                                <td className="px-3 text-slate-500">{inv.service_date}</td>
+                                <td className="px-3 text-right font-medium">{fmt2(Number(inv.total_gross) || 0)}</td>
+                                <td className="px-3 text-slate-600 text-xs uppercase">{inv.status}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </CardContent>

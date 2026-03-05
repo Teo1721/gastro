@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Calendar, MapPin, AlertTriangle, CheckCircle, Plus, Trash2,
   Save, Search, Eye, Send, ArrowLeft, ClipboardList, BarChart3,
@@ -41,6 +42,8 @@ type Ingredient = {
 
 function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'ingredients' | 'products'>('ingredients');
   const [search, setSearch] = useState<string>("");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [sortBy, setSortBy] = useState<string>("name");
@@ -54,11 +57,17 @@ function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editIngredient, setEditIngredient] = useState<Partial<Ingredient>>({});
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editProduct, setEditProduct] = useState<any>({});
 
   useEffect(() => {
-    fetchIngredients();
+    if (activeTab === 'ingredients') {
+      fetchIngredients();
+    } else {
+      fetchProducts();
+    }
     // eslint-disable-next-line
-  }, [search, categoryFilter, sortBy, sortDir]);
+  }, [search, categoryFilter, sortBy, sortDir, activeTab]);
 
   async function fetchIngredients() {
     let query = supabase.from("ingredients").select("id,name,category,base_unit,min_threshold,last_price");
@@ -67,6 +76,15 @@ function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
     query = query.order(sortBy, { ascending: sortDir === "asc" });
     const { data } = await query;
     setIngredients(data || []);
+  }
+
+  async function fetchProducts() {
+    let query = supabase.from("inventory_products").select("id,name,category,unit,last_price,active");
+    if (search) query = query.ilike("name", `%${search}%`);
+    if (categoryFilter) query = query.eq("category", categoryFilter);
+    query = query.order(sortBy, { ascending: sortDir === "asc" });
+    const { data } = await query;
+    setProducts(data || []);
   }
 
   async function addIngredient() {
@@ -117,6 +135,17 @@ function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
     fetchIngredients();
   }
 
+  async function updateProduct(id: string) {
+    const { error } = await supabase.from("inventory_products").update(editProduct).eq("id", id);
+    if (error) {
+      alert('Błąd: ' + error.message);
+      return;
+    }
+    setEditingProductId(null);
+    setEditProduct({});
+    fetchProducts();
+  }
+
   async function deleteIngredient(id: string) {
     if (window.confirm('Czy na pewno chcesz usunąć ten składnik?')) {
       try {
@@ -152,60 +181,81 @@ function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
     }
   }
 
+  async function deleteProduct(id: string) {
+    if (window.confirm('Czy na pewno chcesz usunąć ten produkt?')) {
+      try {
+        const { error } = await supabase.from('inventory_products').delete().eq('id', id);
+        if (error) throw error;
+        fetchProducts();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
+        alert('Błąd podczas usuwania: ' + message);
+      }
+    }
+  }
+
   return (
     <section className="my-4">
       {/* Header */}
       <div className="mb-8">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-1">Składniki</h2>
-        <p className="text-sm text-gray-600">Zarządzaj bazą danych składników, cenami i progami minimalnych</p>
+        <h2 className="text-2xl font-semibold text-gray-900 mb-1">Składniki i Produkty</h2>
+        <p className="text-sm text-gray-600">Zarządzaj bazą danych składników i produktów magazynowych, cenami i progami minimalnych</p>
       </div>
 
-      {/* Search & Filter Bar */}
-      <Card className="mb-4 border-0 shadow-sm">
-        <CardContent className="pt-4 pb-3">
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Input
-                  placeholder="Wyszukaj składnik..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  className="h-8 text-sm"
-                />
-              </div>
-              <select 
-                value={categoryFilter} 
-                onChange={e => setCategoryFilter(e.target.value)}
-                className="px-3 py-1.5 text-xs border border-gray-300 rounded-md bg-white hover:border-gray-400 transition"
-              >
-                <option value="">Wszystkie kategorie</option>
-                {INGREDIENT_CATEGORIES.map(cat => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex gap-2 text-xs">
-              <Button 
-                onClick={() => setSortBy("name")}
-                variant={sortBy === "name" ? "default" : "outline"}
-                size="sm"
-              >
-                Sortuj po nazwie
-              </Button>
-              <Button 
-                onClick={() => setSortBy("last_price")}
-                variant={sortBy === "last_price" ? "default" : "outline"}
-                size="sm"
-              >
-                Sortuj po cenie
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as 'ingredients' | 'products')} className="mb-4">
+        <TabsList>
+          <TabsTrigger value="ingredients">Składniki ({ingredients.length})</TabsTrigger>
+          <TabsTrigger value="products">Produkty ({products.length})</TabsTrigger>
+        </TabsList>
 
-      {/* Ingredients List */}
-      {ingredients.length === 0 ? (
+        <TabsContent value="ingredients" className="space-y-4">
+          {/* Search & Filter Bar */}
+          <Card className="mb-4 border-0 shadow-sm">
+            <CardContent className="pt-4 pb-3">
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <Input
+                      placeholder="Wyszukaj składnik..."
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                  <select 
+                    value={categoryFilter} 
+                    onChange={e => setCategoryFilter(e.target.value)}
+                    className="px-3 py-1.5 text-xs border border-gray-300 rounded-md bg-white hover:border-gray-400 transition"
+                  >
+                    <option value="">Wszystkie kategorie</option>
+                    {INGREDIENT_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2 text-xs">
+                  <Button 
+                    onClick={() => setSortBy("name")}
+                    variant={sortBy === "name" ? "default" : "outline"}
+                    size="sm"
+                  >
+                    Sortuj po nazwie
+                  </Button>
+                  <Button 
+                    onClick={() => setSortBy("last_price")}
+                    variant={sortBy === "last_price" ? "default" : "outline"}
+                    size="sm"
+                  >
+                    Sortuj po cenie
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Ingredients List */}
+          {ingredients.length === 0 ? (
         <Card className="text-center py-6 border-dashed">
           <p className="text-gray-500 text-sm">Brak składników</p>
         </Card>
@@ -412,8 +462,126 @@ function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="products" className="space-y-4">
+          {/* Products List */}
+          {products.length === 0 ? (
+            <Card className="text-center py-6 border-dashed">
+              <p className="text-gray-500 text-sm">Brak produktów</p>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 mb-6">
+              {products.map(prod => (
+                <Card key={prod.id} className="border-0 shadow-sm hover:shadow-md transition-shadow">
+                  <CardContent className="pt-4 pb-3">
+                    {editingProductId === prod.id ? (
+                      // Edit Mode
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-semibold">Nazwa</Label>
+                            <Input 
+                              value={editProduct.name || prod.name} 
+                              onChange={e => setEditProduct({ ...editProduct, name: e.target.value })}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-semibold">Kategoria</Label>
+                            <Input 
+                              value={editProduct.category || prod.category} 
+                              onChange={e => setEditProduct({ ...editProduct, category: e.target.value })}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-semibold">Jednostka</Label>
+                            <Input 
+                              value={editProduct.unit || prod.unit} 
+                              onChange={e => setEditProduct({ ...editProduct, unit: e.target.value })}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-semibold">Cena (zł)</Label>
+                            <Input
+                              type="number"
+                              value={(editProduct.last_price ?? prod.last_price ?? '') as any}
+                              onChange={e => setEditProduct({ ...editProduct, last_price: Number(e.target.value) })}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-3 pt-4 border-t">
+                          <Button 
+                            onClick={() => updateProduct(prod.id)}
+                            className="bg-green-600 hover:bg-green-700"
+                            size="sm"
+                          >
+                            <CheckCircle className="w-4 h-4 mr-2" />Zapisz
+                          </Button>
+                          <Button 
+                            onClick={() => setEditingProductId(null)}
+                            variant="outline"
+                            size="sm"
+                          >
+                            Anuluj
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      // View Mode
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h3 className="text-base font-semibold text-gray-900 mb-1.5">{prod.name}</h3>
+                          <div className="grid grid-cols-4 gap-4 text-xs">
+                            <div>
+                              <p className="text-gray-500 text-xs uppercase tracking-wide">Kategoria</p>
+                              <p className="text-gray-900 font-medium mt-0.5">{prod.category}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500 text-xs uppercase tracking-wide">Jednostka</p>
+                              <p className="text-gray-900 font-medium mt-0.5">{prod.unit}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500 text-xs uppercase tracking-wide">Cena</p>
+                              <p className="text-gray-900 font-semibold mt-0.5 text-sm">{prod.last_price ? `${prod.last_price.toFixed(2)} zł` : '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500 text-xs uppercase tracking-wide">Status</p>
+                              <p className="text-gray-900 font-medium mt-0.5">{prod.active ? '✅ Aktywny' : '❌ Nieaktywny'}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 ml-6">
+                          <Button 
+                            onClick={() => { setEditingProductId(prod.id); setEditProduct(prod); }}
+                            variant="outline"
+                            size="sm"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </Button>
+                          <Button 
+                            onClick={() => deleteProduct(prod.id)}
+                            variant="destructive"
+                            size="sm"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </section>
   );
+
 }
 
 /* ================================================================== */
@@ -527,6 +695,7 @@ type SemisReconEntry = {
 type ClosedMonth = {
   id: string; location_id: string; month: string; year: number
   closed_at: string; closed_by: string; location_name?: string
+  document_url?: string | null; document_name?: string | null; notes?: string | null
 }
 
 type MenuPricingDish = {
@@ -632,8 +801,10 @@ export default function AdminDashboard() {
 
   // ── Daily Reports ──
   const [pendingDailyReports, setPendingDailyReports] = useState<DailyReport[]>([])
+  const [allDailyReports, setAllDailyReports] = useState<DailyReport[]>([])
   const [selectedDailyReport, setSelectedDailyReport] = useState<DailyReport | null>(null)
   const [dailyReportEmployeeHours, setDailyReportEmployeeHours] = useState<any[]>([])
+  const [dailyReportsView, setDailyReportsView] = useState<'pending' | 'history'>('pending')
 
   // ── PnL ──
   const [pnl, setPnl] = useState({
@@ -704,6 +875,8 @@ export default function AdminDashboard() {
   const [closeYear, setCloseYear] = useState(new Date().getFullYear())
   const [closeLocationId, setCloseLocationId] = useState('')
   const [closing, setClosing] = useState(false)
+  const [closeDocument, setCloseDocument] = useState<File | null>(null)
+  const [closeNotes, setCloseNotes] = useState('')
 
   // ── Reports ──
   const [reportType, setReportType] = useState<string | null>(null)
@@ -844,8 +1017,27 @@ export default function AdminDashboard() {
     }
   }
 
+  const fetchAllDailyReports = async () => {
+    let q = supabase.from('sales_daily')
+      .select('*, locations:location_id(name)')
+      .order('date', { ascending: false })
+    
+    if (filterLocationId !== 'all') q = q.eq('location_id', filterLocationId)
+    
+    const { data } = await q
+    if (data) {
+      setAllDailyReports(data.map((r: any) => ({
+        ...r,
+        location_name: r.locations?.name || 'Nieznana',
+      })))
+    }
+  }
+
   useEffect(() => {
-    if (activeView === 'daily_reports') fetchPendingDailyReports()
+    if (activeView === 'daily_reports') {
+      fetchPendingDailyReports()
+      fetchAllDailyReports()
+    }
   }, [activeView, filterLocationId])
 
   const openDailyReportDetail = async (report: DailyReport) => {
@@ -1050,16 +1242,148 @@ export default function AdminDashboard() {
 
       if (updateError) throw updateError
 
-      // 2. Mark notification as done (ignore if none)
+      // 2. If approved, ensure warehouse transactions are created from invoice items
+      if (status === 'approved') {
+        const { data: invoice } = await supabase
+          .from('invoices')
+          .select('*, invoice_items(*)')
+          .eq('id', id)
+          .single()
+        
+        if (invoice && invoice.invoice_items && invoice.invoice_items.length > 0) {
+          // Get current user ID
+          const { data: { user } } = await supabase.auth.getUser()
+          const userId = user?.id
+
+          // Ensure product_id exists for product-like invoice items (especially SEMIS typed manually)
+          const productLines = invoice.invoice_items.filter((item: any) => !item.ingredient_id)
+          const productIdByName = new Map<string, string>()
+
+          for (const item of productLines) {
+            const hasProductId = !!item.product_id
+            const productName = String(item.product_name || '').trim()
+            if (hasProductId || !productName) continue
+
+            const cacheKey = productName.toLowerCase()
+            let resolvedProductId = productIdByName.get(cacheKey)
+
+            if (!resolvedProductId) {
+              const { data: existingProd } = await supabase
+                .from('inventory_products')
+                .select('id,name')
+                .ilike('name', productName)
+                .limit(1)
+                .maybeSingle()
+
+              if (existingProd?.id) {
+                resolvedProductId = existingProd.id
+              } else {
+                const { data: createdProd, error: createProdError } = await supabase
+                  .from('inventory_products')
+                  .insert({
+                    name: productName,
+                    unit: item.unit || 'szt',
+                    category: invoice.invoice_type === 'SEMIS' ? 'semis' : 'inne',
+                    is_food: true,
+                    last_price: Number(item.net_price) || 0,
+                    active: true,
+                  })
+                  .select('id')
+                  .single()
+
+                if (createProdError) {
+                  console.error('Error creating inventory product from invoice item:', createProdError)
+                  continue
+                }
+
+                resolvedProductId = createdProd?.id
+              }
+
+              if (resolvedProductId) productIdByName.set(cacheKey, resolvedProductId)
+            }
+
+            if (resolvedProductId) {
+              const { error: updateItemError } = await supabase
+                .from('invoice_items')
+                .update({ product_id: resolvedProductId })
+                .eq('id', item.id)
+
+              if (!updateItemError) {
+                item.product_id = resolvedProductId
+              } else {
+                console.error('Error updating invoice item product_id:', updateItemError)
+              }
+            }
+          }
+
+          // Create warehouse transactions for items with ingredient_id (COS ingredients from Krok 3)
+          const ingredientTxs = invoice.invoice_items
+            .filter((item: any) => item.ingredient_id)
+            .map((item: any) => ({
+              ingredient_id: item.ingredient_id,
+              location_id: invoice.location_id,
+              tx_type: 'invoice_in',
+              quantity: Number(item.quantity) || 0,
+              unit: item.unit || 'kg',
+              price: Number(item.net_price) || 0,
+              reason: `Invoice approved: ${invoice.invoice_number || 'N/A'}`,
+              invoice_id: id,
+              created_by: userId,
+              created_at: invoice.service_date || new Date().toISOString()
+            }))
+
+          // Create warehouse transactions for items with product_id (SEMIS products or COS Krok 4)
+          const productTxs = invoice.invoice_items
+            .filter((item: any) => item.product_id && !item.ingredient_id)
+            .map((item: any) => ({
+              ingredient_id: null,
+              product_id: item.product_id,
+              location_id: invoice.location_id,
+              tx_type: 'invoice_in',
+              quantity: Number(item.quantity) || 0,
+              unit: item.unit || 'szt',
+              price: Number(item.net_price) || 0,
+              reason: `Invoice approved: ${invoice.invoice_number || 'N/A'}`,
+              invoice_id: id,
+              created_by: userId,
+              created_at: invoice.service_date || new Date().toISOString()
+            }))
+
+          const allTxs = [...ingredientTxs, ...productTxs]
+
+          if (allTxs.length > 0) {
+            const { data: existingTxs } = await supabase
+              .from('inventory_transactions')
+              .select('id')
+              .eq('invoice_id', id)
+              .limit(1)
+
+            if (existingTxs && existingTxs.length > 0) {
+              console.log('Invoice transactions already exist, skipping duplicate insert for invoice:', id)
+            } else {
+            const { error: txError } = await supabase
+              .from('inventory_transactions')
+              .insert(allTxs)
+            
+            if (txError) {
+              console.error('Error creating warehouse transactions:', txError)
+            }
+            }
+          }
+        }
+      }
+
+      // 3. Mark notification as done (ignore if none)
       const { error: notifError } = await supabase.from('admin_notifications')
         .update({ status: 'actioned', actioned_at: new Date().toISOString() })
         .eq('reference_id', id)
 
       if (notifError) console.warn('Notification update error:', notifError.message)
 
-      // 3. Refresh dashboard & notifications
+      // 4. Refresh dashboard & notifications
       await fetchDashboard()
       await fetchNotifications()
+      await fetchProducts()
 
       alert(`✅ Faktura ${status === 'approved' ? 'zatwierdzona' : 'odrzucona'}`)
       setLoading(false)
@@ -1533,14 +1857,88 @@ export default function AdminDashboard() {
   const handleCloseMonth = async () => {
     if (!closeLocationId || !closeMonth) { alert('Wybierz lokalizację i miesiąc'); return }
     setClosing(true)
-    if (closedMonths.find(c => c.location_id === closeLocationId && c.month === closeMonth && c.year === closeYear)) { alert('⚠ Już zamknięty'); setClosing(false); return }
-    const ms = `${closeYear}-${closeMonth}-01`, me = new Date(closeYear, Number(closeMonth), 0).toISOString().split('T')[0]
-    const { data: pi } = await supabase.from('invoices').select('id').eq('location_id', closeLocationId).eq('status', 'submitted').gte('service_date', ms).lte('service_date', me)
-    if (pi?.length) { alert(`⚠ ${pi.length} faktur oczekuje`); setClosing(false); return }
-    const { data: pj } = await supabase.from('inventory_jobs').select('id').eq('location_id', closeLocationId).in('status', ['draft', 'submitted']).eq('type', 'MONTHLY').gte('due_date', ms).lte('due_date', me)
-    if (pj?.length) { alert('⚠ Inwentaryzacja niezatwierdzona'); setClosing(false); return }
-    const { error } = await supabase.from('closed_months').insert({ location_id: closeLocationId, month: closeMonth, year: closeYear, closed_by: adminName })
-    if (error) alert('Błąd: ' + error.message); else { alert('✅ Zamknięto'); fetchClosedMonths() }
+    
+    try {
+      if (closedMonths.find(c => c.location_id === closeLocationId && c.month === closeMonth && c.year === closeYear)) {
+        alert('⚠ Już zamknięty')
+        setClosing(false)
+        return
+      }
+      
+      const ms = `${closeYear}-${closeMonth}-01`
+      const me = new Date(closeYear, Number(closeMonth), 0).toISOString().split('T')[0]
+      
+      // Check pending invoices
+      const { data: pi } = await supabase.from('invoices').select('id').eq('location_id', closeLocationId).eq('status', 'submitted').gte('service_date', ms).lte('service_date', me)
+      if (pi?.length) {
+        alert(`⚠ ${pi.length} faktur oczekuje`)
+        setClosing(false)
+        return
+      }
+      
+      // Check pending inventory
+      const { data: pj } = await supabase.from('inventory_jobs').select('id').eq('location_id', closeLocationId).in('status', ['draft', 'submitted']).eq('type', 'MONTHLY').gte('due_date', ms).lte('due_date', me)
+      if (pj?.length) {
+        alert('⚠ Inwentaryzacja niezatwierdzona')
+        setClosing(false)
+        return
+      }
+      
+      let documentUrl = null
+      let documentName = null
+      
+      // Upload document if provided
+      if (closeDocument) {
+        const fileExt = closeDocument.name.split('.').pop()
+        const fileName = `${closeLocationId}_${closeYear}_${closeMonth}_${Date.now()}.${fileExt}`
+        const filePath = `${closeLocationId}/${closeYear}/${fileName}`
+        
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('month-closing-reports')
+          .upload(filePath, closeDocument, {
+            cacheControl: '3600',
+            upsert: false
+          })
+        
+        if (uploadError) {
+          console.error('Upload error:', uploadError)
+          alert('Błąd uploadu dokumentu: ' + uploadError.message)
+          setClosing(false)
+          return
+        }
+        
+        // Get public URL
+        const { data: urlData } = supabase.storage
+          .from('month-closing-reports')
+          .getPublicUrl(filePath)
+        
+        documentUrl = urlData.publicUrl
+        documentName = closeDocument.name
+      }
+      
+      // Insert closing record
+      const { error } = await supabase.from('closed_months').insert({
+        location_id: closeLocationId,
+        month: closeMonth,
+        year: closeYear,
+        closed_by: adminName,
+        document_url: documentUrl,
+        document_name: documentName,
+        notes: closeNotes.trim() || null
+      })
+      
+      if (error) {
+        alert('Błąd: ' + error.message)
+      } else {
+        alert('✅ Zamknięto')
+        setCloseDocument(null)
+        setCloseNotes('')
+        fetchClosedMonths()
+      }
+    } catch (err: any) {
+      alert('Błąd: ' + err.message)
+    }
+    
     setClosing(false)
   }
 
@@ -1872,55 +2270,144 @@ export default function AdminDashboard() {
         {/* ═══════════════════════════════════════════════════════ */}
         {activeView === 'daily_reports' && (
           <div className="space-y-6">
-            <h1 className="text-3xl font-bold">Raporty dzienne do zatwierdzenia</h1>
-            <Card>
-              <CardContent className="pt-4">
-                {pendingDailyReports.length === 0 ? (
-                  <p className="text-center text-slate-400 py-8">Brak raportów do zatwierdzenia</p>
-                ) : (
-                  <div className="space-y-3">
-                    {pendingDailyReports.map(report => {
-                      const net = Number(report.net_revenue) || (Number(report.gross_revenue) || 0) / (1 + VAT_RATE)
-                      const laborCost = (Number(report.total_labor_hours) || 0) * (Number(report.avg_hourly_rate) || 0)
-                      const laborPct = net > 0 ? laborCost / net : 0
-                      
-                      return (
-                        <div key={report.id} 
-                          className="flex items-center justify-between p-4 rounded-lg border hover:bg-slate-50 cursor-pointer"
-                          onClick={() => openDailyReportDetail(report)}>
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center">
-                              <FileText className="w-6 h-6 text-blue-600" />
-                            </div>
-                            <div>
-                              <p className="font-bold">{report.location_name}</p>
-                              <p className="text-sm text-slate-500">{report.date} • {report.closing_person}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-6">
-                            <div className="text-right">
-                              <p className="font-bold">{fmt0(net)}</p>
-                              <p className="text-xs text-slate-500">Netto</p>
-                            </div>
-                            <div className="text-right">
-                              <p className={`font-bold ${laborPct > 0.3 ? 'text-red-600' : ''}`}>{fmtPct(laborPct)}</p>
-                              <p className="text-xs text-slate-500">Praca</p>
-                            </div>
-                            {Math.abs(Number(report.cash_diff) || 0) > 0.01 && (
-                              <div className="text-right">
-                                <p className="font-bold text-red-600">{fmt2(Number(report.cash_diff) || 0)}</p>
-                                <p className="text-xs text-slate-500">Różn. gotówki</p>
+            <h1 className="text-3xl font-bold">Raporty dzienne</h1>
+            
+            {/* Tabs */}
+            <div className="flex gap-2">
+              <Button 
+                variant={dailyReportsView === 'pending' ? 'default' : 'outline'}
+                onClick={() => setDailyReportsView('pending')}
+              >
+                Do zatwierdzenia ({pendingDailyReports.length})
+              </Button>
+              <Button 
+                variant={dailyReportsView === 'history' ? 'default' : 'outline'}
+                onClick={() => setDailyReportsView('history')}
+              >
+                Historia
+              </Button>
+            </div>
+
+            {/* Pending View */}
+            {dailyReportsView === 'pending' && (
+              <Card>
+                <CardContent className="pt-4">
+                  {pendingDailyReports.length === 0 ? (
+                    <p className="text-center text-slate-400 py-8">Brak raportów do zatwierdzenia</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {pendingDailyReports.map(report => {
+                        const net = Number(report.net_revenue) || (Number(report.gross_revenue) || 0) / (1 + VAT_RATE)
+                        const laborCost = (Number(report.total_labor_hours) || 0) * (Number(report.avg_hourly_rate) || 0)
+                        const laborPct = net > 0 ? laborCost / net : 0
+                        
+                        return (
+                          <div key={report.id} 
+                            className="flex items-center justify-between p-4 rounded-lg border hover:bg-slate-50 cursor-pointer"
+                            onClick={() => openDailyReportDetail(report)}>
+                            <div className="flex items-center gap-4">
+                              <div className="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center">
+                                <FileText className="w-6 h-6 text-blue-600" />
                               </div>
-                            )}
-                            <ChevronRight className="w-5 h-5 text-slate-400" />
+                              <div>
+                                <p className="font-bold">{report.location_name}</p>
+                                <p className="text-sm text-slate-500">{report.date} • {report.closing_person}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-6">
+                              <div className="text-right">
+                                <p className="font-bold">{fmt0(net)}</p>
+                                <p className="text-xs text-slate-500">Netto</p>
+                              </div>
+                              <div className="text-right">
+                                <p className={`font-bold ${laborPct > 0.3 ? 'text-red-600' : ''}`}>{fmtPct(laborPct)}</p>
+                                <p className="text-xs text-slate-500">Praca</p>
+                              </div>
+                              {Math.abs(Number(report.cash_diff) || 0) > 0.01 && (
+                                <div className="text-right">
+                                  <p className="font-bold text-red-600">{fmt2(Number(report.cash_diff) || 0)}</p>
+                                  <p className="text-xs text-slate-500">Różn. gotówki</p>
+                                </div>
+                              )}
+                              <ChevronRight className="w-5 h-5 text-slate-400" />
+                            </div>
                           </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                        )
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* History View */}
+            {dailyReportsView === 'history' && (
+              <Card>
+                <CardContent className="pt-4">
+                  {allDailyReports.length === 0 ? (
+                    <p className="text-center text-slate-400 py-8">Brak raportów</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-3 px-4 font-semibold text-slate-700">Data</th>
+                            <th className="text-left py-3 px-4 font-semibold text-slate-700">Lokalizacja</th>
+                            <th className="text-left py-3 px-4 font-semibold text-slate-700">Osoba</th>
+                            <th className="text-right py-3 px-4 font-semibold text-slate-700">Brutto</th>
+                            <th className="text-right py-3 px-4 font-semibold text-slate-700">Netto</th>
+                            <th className="text-right py-3 px-4 font-semibold text-slate-700">Praca %</th>
+                            <th className="text-center py-3 px-4 font-semibold text-slate-700">Status</th>
+                            <th className="text-center py-3 px-4 font-semibold text-slate-700">Akcja</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allDailyReports.map(report => {
+                            const net = Number(report.net_revenue) || (Number(report.gross_revenue) || 0) / (1 + VAT_RATE)
+                            const gross = Number(report.gross_revenue) || 0
+                            const laborCost = (Number(report.total_labor_hours) || 0) * (Number(report.avg_hourly_rate) || 0)
+                            const laborPct = net > 0 ? laborCost / net : 0
+                            const statusLabels: {[key: string]: string} = {
+                              'pending': 'Oczekuje',
+                              'submitted': 'Zgłoszony',
+                              'approved': 'Zatwierdzony',
+                              'rejected': 'Odrzucony'
+                            }
+                            const statusColors: {[key: string]: string} = {
+                              'pending': 'bg-yellow-100 text-yellow-700',
+                              'submitted': 'bg-blue-100 text-blue-700',
+                              'approved': 'bg-green-100 text-green-700',
+                              'rejected': 'bg-red-100 text-red-700'
+                            }
+                            return (
+                              <tr key={report.id} className="border-b hover:bg-slate-50">
+                                <td className="py-3 px-4">{report.date}</td>
+                                <td className="py-3 px-4">{report.location_name}</td>
+                                <td className="py-3 px-4">{report.closing_person || '—'}</td>
+                                <td className="py-3 px-4 text-right font-medium">{fmt0(gross)}</td>
+                                <td className="py-3 px-4 text-right font-medium">{fmt0(net)}</td>
+                                <td className="py-3 px-4 text-right"><span className={laborPct > 0.3 ? 'text-red-600 font-bold' : ''}>{fmtPct(laborPct)}</span></td>
+                                <td className="py-3 px-4 text-center"><span className={`text-xs px-2 py-1 rounded font-medium ${statusColors[report.status] || 'bg-gray-100 text-gray-700'}`}>{statusLabels[report.status] || report.status}</span></td>
+                                <td className="py-3 px-4 text-center">
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm"
+                                    onClick={() => openDailyReportDetail(report)}
+                                    className="text-blue-600 hover:text-blue-700"
+                                  >
+                                    Pokaż
+                                  </Button>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
           </div>
         )}
 
@@ -2538,6 +3025,7 @@ export default function AdminDashboard() {
             <h1 className="text-3xl font-bold">Zamknięcie miesiąca</h1>
             <Card><CardContent className="space-y-4 pt-6">
               <p className="text-sm text-slate-500">Sprawdza: faktury zatwierdzone, inwentaryzacja zatwierdzona. Blokuje edycję danych z tego okresu.</p>
+              
               <div className="grid grid-cols-3 gap-4 bg-slate-50 rounded-lg p-6">
                 <div className="space-y-2"><Label>Lokalizacja *</Label>
                   <select value={closeLocationId} onChange={e => setCloseLocationId(e.target.value)} className="h-10 w-full rounded-md border border-input px-3 text-sm">
@@ -2547,18 +3035,95 @@ export default function AdminDashboard() {
                     {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(m => (<option key={m} value={m}>{new Date(2000, Number(m) - 1).toLocaleString('pl-PL', { month: 'long' })}</option>))}</select></div>
                 <div className="space-y-2"><Label>Rok</Label><Input type="number" value={closeYear} onChange={e => setCloseYear(Number(e.target.value))} /></div>
               </div>
+              
+              <div className="space-y-3 bg-white rounded-lg p-6 border">
+                <div className="space-y-2">
+                  <Label>Dokument (opcjonalnie)</Label>
+                  <p className="text-xs text-slate-500 mb-2">Załącz zeskanowany raport lub podsumowanie (PDF, JPG, PNG)</p>
+                  <Input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) {
+                        // Check file size (max 10MB)
+                        if (file.size > 10 * 1024 * 1024) {
+                          alert('Plik jest za duży. Maksymalny rozmiar: 10 MB')
+                          e.target.value = ''
+                          return
+                        }
+                        setCloseDocument(file)
+                      }
+                    }}
+                    className="cursor-pointer"
+                  />
+                  {closeDocument && (
+                    <div className="flex items-center gap-2 text-sm text-green-600">
+                      <span>✓ {closeDocument.name} ({(closeDocument.size / 1024).toFixed(0)} KB)</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setCloseDocument(null)}
+                        className="h-6 px-2 text-red-500"
+                      >
+                        Usuń
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Notatki (opcjonalnie)</Label>
+                  <textarea
+                    value={closeNotes}
+                    onChange={(e) => setCloseNotes(e.target.value)}
+                    placeholder="Dodatkowe informacje o zamknięciu miesiąca..."
+                    className="w-full h-20 rounded-md border border-input px-3 py-2 text-sm resize-none"
+                  />
+                </div>
+              </div>
+              
               <div className="flex justify-end"><Button onClick={handleCloseMonth} disabled={closing || !closeLocationId} className="bg-red-600 hover:bg-red-700 text-white h-12 px-6 font-bold">
                 {closing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Lock className="w-4 h-4 mr-2" />}Zamknij</Button></div>
             </CardContent></Card>
+            
             <Card><CardHeader><CardTitle>Historia zamknięć</CardTitle></CardHeader><CardContent>
               {closedMonths.length === 0 ? <p className="text-center text-slate-400 py-4">Brak</p> :
                 <table className="w-full text-sm"><thead><tr className="border-b text-left text-xs text-slate-500 uppercase">
-                  <th className="py-2 pr-2">Lokalizacja</th><th>Miesiąc</th><th>Rok</th><th>Kto</th><th>Data</th><th></th>
+                  <th className="py-2 pr-2">Lokalizacja</th><th>Miesiąc</th><th>Rok</th><th>Kto</th><th>Data</th><th>Dokument</th><th></th>
                 </tr></thead><tbody>{closedMonths.map(c => (
                   <tr key={c.id} className="border-b hover:bg-slate-50">
                     <td className="py-2 pr-2 font-medium">{c.location_name}</td>
                     <td>{new Date(2000, Number(c.month) - 1).toLocaleString('pl-PL', { month: 'long' })}</td>
-                    <td>{c.year}</td><td className="text-slate-500">{c.closed_by}</td><td className="text-slate-500">{c.closed_at?.split('T')[0]}</td>
+                    <td>{c.year}</td>
+                    <td className="text-slate-500">{c.closed_by}</td>
+                    <td className="text-slate-500">{c.closed_at?.split('T')[0]}</td>
+                    <td>
+                      {c.document_url ? (
+                        <div className="flex flex-col gap-1">
+                          <a
+                            href={c.document_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 underline text-xs flex items-center gap-1"
+                          >
+                            📄 {c.document_name || 'Pobierz'}
+                          </a>
+                          {c.notes && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => alert(c.notes)}
+                              className="h-6 px-2 text-xs text-slate-600"
+                            >
+                              💬 Notatki
+                            </Button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 text-xs">—</span>
+                      )}
+                    </td>
                     <td><Button size="sm" variant="ghost" onClick={() => reopenMonth(c.id)} className="text-red-500">Otwórz</Button></td>
                   </tr>))}</tbody></table>}
             </CardContent></Card>
@@ -2695,7 +3260,31 @@ export default function AdminDashboard() {
                         )}
                       </div>
                     </div>
-                    <span className="text-xs uppercase font-bold">{inv.status}</span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-xs uppercase font-bold">{inv.status}</span>
+                      <div className="flex gap-1">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={loading || inv.status === 'approved'}
+                          onClick={() => updateInvoiceStatus(inv.id, 'approved')}
+                          className="h-7 px-2 text-[10px]"
+                        >
+                          Zatwierdź
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={loading || inv.status === 'declined'}
+                          onClick={() => updateInvoiceStatus(inv.id, 'declined')}
+                          className="h-7 px-2 text-[10px] text-red-700 border-red-200 hover:border-red-400"
+                        >
+                          Odrzuć
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 ))
               )}
