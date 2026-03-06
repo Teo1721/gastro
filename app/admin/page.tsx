@@ -1829,14 +1829,72 @@ export default function AdminDashboard() {
 
   const approveJob = async () => {
     if (!selectedReviewJob) return
-    await supabase.from('inventory_jobs').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: adminName }).eq('id', selectedReviewJob.id)
-    
-    // Mark related notification as actioned
-    await supabase.from('admin_notifications')
-      .update({ status: 'actioned', actioned_at: new Date().toISOString() })
-      .eq('reference_id', selectedReviewJob.id)
-    
-    alert('✅ Zatwierdzona'); setSelectedReviewJob(null); setActiveView('inv_approvals'); fetchSubmittedJobs(); fetchNotifications()
+
+    try {
+      // Build inventory correction transactions based on differences
+      const adjustments = reviewJobItems
+        .filter((item) => item.product_id && item.counted_qty !== null)
+        .map((item) => {
+          const counted = item.counted_qty ?? 0
+          const expected = item.expected_qty ?? 0
+          const diff = counted - expected
+          if (Math.abs(diff) < 0.0001) return null
+
+          // Positive difference = stock increase, negative = stock decrease
+          const isIncrease = diff > 0
+
+          return {
+            ingredient_id: null,
+            product_id: item.product_id,
+            location_id: selectedReviewJob.location_id,
+            tx_type: isIncrease ? 'invoice_in' : 'inventory_correction',
+            quantity: Math.abs(diff),
+            unit: item.unit || 'szt',
+            price: item.last_price || 0,
+            reason: `Inventory adjustment — job ${selectedReviewJob.id}`,
+            invoice_id: null,
+            created_by: adminId,
+            created_at: new Date().toISOString(),
+          }
+        })
+        .filter((tx): tx is any => tx !== null)
+
+      if (adjustments.length > 0) {
+        const { error: txError } = await supabase
+          .from('inventory_transactions')
+          .insert(adjustments)
+
+        if (txError) {
+          console.error('Error creating inventory adjustment transactions:', txError)
+          alert('Błąd tworzenia korekt magazynowych: ' + txError.message)
+        }
+      }
+
+      // Mark job as approved
+      await supabase
+        .from('inventory_jobs')
+        .update({
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+          approved_by: adminName,
+        })
+        .eq('id', selectedReviewJob.id)
+
+      // Mark related notification as actioned
+      await supabase
+        .from('admin_notifications')
+        .update({ status: 'actioned', actioned_at: new Date().toISOString() })
+        .eq('reference_id', selectedReviewJob.id)
+
+      alert('✅ Inwentaryzacja zatwierdzona i zastosowana w stanie magazynu')
+      setSelectedReviewJob(null)
+      setActiveView('inv_approvals')
+      fetchSubmittedJobs()
+      fetchNotifications()
+    } catch (err: any) {
+      console.error('Error approving inventory job:', err)
+      alert('Błąd zatwierdzania inwentaryzacji: ' + (err?.message || String(err)))
+    }
   }
 
   const sendForCorrection = async () => {
