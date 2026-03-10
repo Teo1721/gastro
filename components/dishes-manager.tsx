@@ -441,7 +441,7 @@ export function DishesManager({ supabase }: DishesManagerProps) {
           <CardTitle>Menu - Dania (ceny)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-6 gap-3 items-end">
+          <div className="grid grid-cols-7 gap-3 items-end">
             <div>
               <Label className="text-xs">Receptura</Label>
               <Select value={newDish.recipeId} onValueChange={(val) => setNewDish({ ...newDish, recipeId: val })}>
@@ -482,6 +482,12 @@ export function DishesManager({ supabase }: DishesManagerProps) {
               placeholder="Cena net"
               value={newDish.priceNet}
               onChange={(e) => setNewDish({ ...newDish, priceNet: e.target.value })}
+            />
+            <Input
+              type="number"
+              placeholder="Cena brutto"
+              value={newDish.priceGross}
+              onChange={(e) => setNewDish({ ...newDish, priceGross: e.target.value })}
             />
             <Input
               type="number"

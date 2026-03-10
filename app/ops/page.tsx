@@ -222,7 +222,7 @@ export default function OpsDashboard() {
   const [semisForm, setSemisForm] = useState({
     category: '', description: '',
   })
-  const [cosWarehouseProducts, setCosWarehouseProducts] = useState<{product_id: string; product_name: string; quantity: string; netPrice: string; vatRate: string}[]>([])
+  const [cosWarehouseProducts, setCosWarehouseProducts] = useState<{product_id: string; product_name: string; quantity: string; netPrice: string; vatRate: string; expiryDate?: string}[]>([])
   const [warehouseProductsData, setWarehouseProductsData] = useState<{id: string; name: string; last_price: number | null}[]>([])
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -454,11 +454,14 @@ export default function OpsDashboard() {
   // ═══════════════════════════════════════════════════════════════════
   // DERIVED KPI VALUES
   // ═══════════════════════════════════════════════════════════════════
-  const gross = Number(salesForm.gross) || 0
   const tx = Number(salesForm.transactions) || 0
   const card = Number(salesForm.card) || 0
   const cash = Number(salesForm.cash) || 0
   const online = Number(salesForm.online) || 0
+  const grossInput = Number(salesForm.gross) || 0
+  const paymentsTotal = card + cash + online
+  // If "brutto" is not provided, fall back to sum of payment methods
+  const gross = grossInput > 0 ? grossInput : paymentsTotal
   const planGross = Number(salesForm.targetGross) || 0
   const planTx = Number(salesForm.targetTx) || 0
   const netManual = Number(salesForm.netRevenue) || 0
@@ -828,7 +831,9 @@ export default function OpsDashboard() {
               reason: 'cos invoice warehouse addition',
               invoice_id: invoiceId,
               created_by: userId,
-              created_at: invoiceCommon.saleDate || new Date().toISOString()
+              created_at: invoiceCommon.saleDate || new Date().toISOString(),
+              // Requires expiry_date column on inventory_transactions
+              expiry_date: p.expiryDate || null,
             })
           }
         }
@@ -1605,9 +1610,14 @@ export default function OpsDashboard() {
                           <CardContent className="space-y-4">
                             <p className="text-sm text-slate-500">Wybierz produkty z magazynu lub dodaj z Krok 3. Każda pozycja będzie dodana do stanu magazynowego z ceną i VAT.</p>
                             <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 border-b pb-2">
-                              <div className="col-span-3">Produkt</div><div className="col-span-1 text-right">Ilość</div>
-                              <div className="col-span-2 text-right">Cena netto</div><div className="col-span-2 text-right">Netto</div>
-                              <div className="col-span-1">VAT</div><div className="col-span-2 text-right">Brutto</div><div className="col-span-1" /></div>
+                              <div className="col-span-3">Produkt</div>
+                              <div className="col-span-1 text-right">Ilość</div>
+                              <div className="col-span-2 text-right">Cena netto</div>
+                              <div className="col-span-2 text-right">Netto</div>
+                              <div className="col-span-1">VAT</div>
+                              <div className="col-span-1 text-xs">Data ważn.</div>
+                              <div className="col-span-2 text-right">Brutto / Usuń</div>
+                            </div>
                             
                             {cosWarehouseProducts.map((item, i) => {
                               const qty = Number(item.quantity) || 0
@@ -1630,10 +1640,29 @@ export default function OpsDashboard() {
                                   }} className="h-9 w-full rounded-md border border-input bg-background px-1 text-xs">
                                     {VAT_RATES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                                   </select></div>
-                                  <div className="col-span-2 text-right font-medium">{lineGross > 0 ? fmt2(lineGross) : '—'}</div>
-                                  <div className="col-span-1 flex justify-end"><Button variant="ghost" size="icon" onClick={() => {
-                                    setCosWarehouseProducts(cosWarehouseProducts.filter((_, idx) => idx !== i))
-                                  }} className="h-8 w-8 text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></Button></div>
+                                  <div className="col-span-1">
+                                    <Input
+                                      type="date"
+                                      className="h-8 text-[10px] px-1"
+                                      value={item.expiryDate || ''}
+                                      onChange={e => {
+                                        const p = [...cosWarehouseProducts]; p[i].expiryDate = e.target.value; setCosWarehouseProducts(p)
+                                      }}
+                                    />
+                                  </div>
+                                  <div className="col-span-2 flex items-center justify-between gap-1">
+                                    <span className="text-right font-medium flex-1 text-xs">{lineGross > 0 ? fmt2(lineGross) : '—'}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => {
+                                        setCosWarehouseProducts(cosWarehouseProducts.filter((_, idx) => idx !== i))
+                                      }}
+                                      className="h-8 w-8 text-slate-400 hover:text-red-600"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  </div>
                                 </div>
                               )
                             })}
@@ -1650,7 +1679,8 @@ export default function OpsDashboard() {
                                         product_name: item.product,
                                         quantity: item.quantity,
                                         netPrice: item.netPrice,
-                                        vatRate: item.vatRate
+                                        vatRate: item.vatRate,
+                                        expiryDate: ''
                                       }])
                                     } else {
                                       alert('Dodaj pozycję w Krok 3 najpierw')
@@ -1680,7 +1710,8 @@ export default function OpsDashboard() {
                                           product_name: selected.name,
                                           quantity: '',
                                           netPrice: String(selected.last_price || 0),
-                                          vatRate: '0.08'
+                                          vatRate: '0.08',
+                                          expiryDate: ''
                                         }])
                                         selectEl.value = ''
                                       }

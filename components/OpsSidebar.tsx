@@ -27,7 +27,7 @@ export function OpsSidebar({
   ]
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-slate-900 text-white flex flex-col">
+    <aside className="fixed left-0 top-0 h-screen w-64 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white flex flex-col shadow-xl">
       {/* Header */}
       <div className="p-6 border-b border-slate-700">
         <h1 className="text-xl font-bold">Panel Operacyjny</h1>

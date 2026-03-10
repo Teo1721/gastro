@@ -23,6 +23,7 @@ import { MenuPriceCalculator } from '@/components/menu-price-calculator'
 import { WarehouseDeviationReport } from '@/components/warehouse-deviation-report'
 import { CentralWarehousePanel } from '@/components/central-warehouse-panel'        
 import { DishesManager } from '@/components/dishes-manager'
+import { WeeklySalesImport } from '@/components/weekly-sales-import'
 
 
 // ================= Ingredients DB =================
@@ -2092,7 +2093,7 @@ export default function AdminDashboard() {
   const cashDiffColor = Math.abs(pnl.cashDiffTotal) < 0.01 ? 'text-green-700' : 'text-red-700'
 
   return (
-    <div className="flex bg-gray-50 min-h-screen">
+    <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-50">
       <Sidebar
         adminName={adminName}
         activeView={activeView}
@@ -2207,6 +2208,9 @@ export default function AdminDashboard() {
                   <div key={i} className="flex items-start gap-2 bg-slate-50 border rounded px-2 py-1 text-sm mb-1"><AlertTriangle className="w-3 h-3 text-amber-500 mt-1" />{a}</div>
                 ))}</CardContent></Card>
             </div>
+
+            {/* Weekly sales Excel import – subtract stock based on sold dishes */}
+            <WeeklySalesImport locations={locations} />
           </div>
         )}
 
