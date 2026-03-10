@@ -28,6 +28,7 @@ type LocationData = {
 }
 type Employee = { id: string; full_name: string; real_hour_cost: number | null }
 type EmployeeRow = { employee_id: string; hours: string }
+type ManualHourRow = { name: string; hours: string; rate: string }
 type ValidationError = { field: string; message: string }
 type InvoiceLineItem = {
   product: string; cosCategory: string; quantity: string
@@ -198,6 +199,7 @@ export default function OpsDashboard() {
   // ── Employees (reporting) ──
   const [employees, setEmployees] = useState<Employee[]>([])
   const [employeeRows, setEmployeeRows] = useState<EmployeeRow[]>([{ employee_id: '', hours: '' }])
+  const [manualHourRows, setManualHourRows] = useState<ManualHourRow[]>([])
 
   // ── Sales form ──
   const [salesForm, setSalesForm] = useState({
@@ -490,10 +492,21 @@ export default function OpsDashboard() {
     return acc
   }, { totalHours: 0, totalCost: 0 })
 
+  const manualTotals = manualHourRows.reduce((acc, row) => {
+    const h = Number(row.hours) || 0
+    const r = Number(row.rate) || 0
+    if (!row.name.trim() || h <= 0 || r <= 0) return acc
+    acc.totalHours += h
+    acc.totalCost += h * r
+    return acc
+  }, { totalHours: 0, totalCost: 0 })
+
   const hoursAgg = Number(salesForm.totalHoursAgg) || 0
   const rateAgg = Number(salesForm.avgRateAgg) || 0
-  const totalHours = employeeTotals.totalHours > 0 ? employeeTotals.totalHours : hoursAgg
-  const laborCost = employeeTotals.totalCost > 0 ? employeeTotals.totalCost : hoursAgg * rateAgg
+  const detailedHours = employeeTotals.totalHours + manualTotals.totalHours
+  const detailedCost = employeeTotals.totalCost + manualTotals.totalCost
+  const totalHours = detailedHours > 0 ? detailedHours : hoursAgg
+  const laborCost = detailedCost > 0 ? detailedCost : hoursAgg * rateAgg
   // Netto po kosztach: sprzedaż netto minus koszt pracy i koszty operacyjne (sekcja 7)
   const netAfterCosts = net - laborCost - dailyOpsTotal
   const laborPercent = net > 0 ? laborCost / net : 0
@@ -591,6 +604,18 @@ export default function OpsDashboard() {
   // ═══════════════════════════════════════════════════════════════════
   // HANDLERS: Reporting
   // ═══════════════════════════════════════════════════════════════════
+  const updateManualRow = (index: number, key: keyof ManualHourRow, value: string) => {
+    setManualHourRows(rows => rows.map((r, i) => i === index ? { ...r, [key]: value } : r))
+  }
+
+  const addManualRow = () => {
+    setManualHourRows(rows => [...rows, { name: '', hours: '', rate: '' }])
+  }
+
+  const removeManualRow = (index: number) => {
+    setManualHourRows(rows => rows.filter((_, i) => i !== index))
+  }
+
   const handleReportSubmit = async () => {
     if (isReadOnly || !selectedLocation) return
     const errors = validateReport()
@@ -1375,9 +1400,90 @@ export default function OpsDashboard() {
                       <div className="col-span-1 flex justify-end">{!isReadOnly && <Button variant="ghost" size="icon" onClick={() => removeEmployeeRow(i)} className="h-8 w-8 text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></Button>}</div>
                     </div>)})}
                   {!isReadOnly && <Button variant="outline" size="sm" onClick={addEmployeeRow} className="mt-2"><Plus className="w-4 h-4 mr-1" />Dodaj</Button>}
-                  <div className="border-t pt-3 text-xs text-slate-500 flex justify-between">
-                    <span>Suma: <b>{totalHours.toFixed(1)} h</b></span><span>Koszt: <b>{fmt2(laborCost)}</b></span><span>Śr: <b>{fmt2(effectiveHourlyRate)}</b></span></div>
                 </CardContent></Card>
+
+              {/* S4b: Godziny – wpis ręczny */}
+              <Card className="mb-4">
+                <CardContent className="space-y-3 pt-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-sm font-semibold text-slate-700">Pracownicy spoza listy (wpis ręczny)</p>
+                  </div>
+                  <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 border-b pb-2">
+                    <div className="col-span-5">Imię i nazwisko</div>
+                    <div className="col-span-2 text-right">Godziny</div>
+                    <div className="col-span-2 text-right">Stawka</div>
+                    <div className="col-span-2 text-right">Koszt</div>
+                    <div className="col-span-1" />
+                  </div>
+                  {manualHourRows.map((row, i) => {
+                    const h = Number(row.hours) || 0
+                    const r = Number(row.rate) || 0
+                    const cost = h * r
+                    return (
+                      <div key={i} className="grid grid-cols-12 gap-2 items-center text-sm">
+                        <div className="col-span-5">
+                          <Input
+                            type="text"
+                            placeholder="Imię i nazwisko"
+                            value={row.name}
+                            onChange={e => updateManualRow(i, 'name', e.target.value)}
+                            disabled={isReadOnly}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <Input
+                            type="number"
+                            value={row.hours}
+                            onChange={e => updateManualRow(i, 'hours', e.target.value)}
+                            disabled={isReadOnly}
+                            className="h-9 text-right"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <Input
+                            type="number"
+                            value={row.rate}
+                            onChange={e => updateManualRow(i, 'rate', e.target.value)}
+                            disabled={isReadOnly}
+                            className="h-9 text-right"
+                          />
+                        </div>
+                        <div className="col-span-2 text-right font-medium">
+                          {cost > 0 ? fmt2(cost) : '—'}
+                        </div>
+                        <div className="col-span-1 flex justify-end">
+                          {!isReadOnly && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeManualRow(i)}
+                              className="h-8 w-8 text-slate-400 hover:text-red-600"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {!isReadOnly && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={addManualRow}
+                      className="mt-2"
+                    >
+                      <Plus className="w-4 h-4 mr-1" />Dodaj ręcznie
+                    </Button>
+                  )}
+                  <div className="border-t pt-3 text-xs text-slate-500 flex justify-between mt-2">
+                    <span>Suma: <b>{totalHours.toFixed(1)} h</b></span>
+                    <span>Koszt: <b>{fmt2(laborCost)}</b></span>
+                    <span>Śr: <b>{fmt2(effectiveHourlyRate)}</b></span>
+                  </div>
+                </CardContent>
+              </Card>
 
               {isLaborAboveThreshold && (
                 <div className={`mb-8 p-4 rounded border-2 ${fieldErr('laborExplanation') ? 'bg-red-50 border-red-400' : 'bg-amber-50 border-amber-400'}`}>
