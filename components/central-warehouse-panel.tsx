@@ -32,6 +32,7 @@ interface DeliveryItem {
   ingredient_id: string
   quantity_ordered: number
   quantity_received: number
+  expiry_date?: string | null
 }
 
 interface WarehousePanelProps {
@@ -64,6 +65,8 @@ export function CentralWarehousePanel({
     totalAmount: '',
     notes: '',
   })
+  const [expirySoon, setExpirySoon] = useState<any[]>([])
+  const [expiryExpired, setExpiryExpired] = useState<any[]>([])
 
   // Fetch all data
   useEffect(() => {
@@ -218,6 +221,68 @@ export function CentralWarehousePanel({
         .limit(20)
       if (deliveryData) setDeliveries(deliveryData)
 
+      // Build expiry alerts (from deliveries and inventory transactions)
+      const soon: any[] = []
+      const expired: any[] = []
+      const today = new Date()
+      const weekFromNow = new Date()
+      weekFromNow.setDate(today.getDate() + 7)
+
+      // Fetch delivery items with expiry dates for alerts
+      if (deliveryData && deliveryData.length > 0) {
+        const deliveryIds = deliveryData.map((d: any) => d.id)
+        const { data: itemData } = await supabase
+          .from('warehouse_delivery_items')
+          .select('id, ingredient_id, quantity_received, expiry_date, ingredients(name, base_unit)')
+          .in('delivery_id', deliveryIds)
+
+        ;(itemData || []).forEach((item: any) => {
+          if (!item.expiry_date || !item.quantity_received) return
+          const exp = new Date(item.expiry_date as string)
+          const record = {
+            id: item.id,
+            ingredient_id: item.ingredient_id,
+            name: item.ingredients?.name || 'Unknown',
+            unit: item.ingredients?.base_unit || 'pcs',
+            quantity: item.quantity_received,
+            expiry_date: item.expiry_date,
+          }
+          if (exp < today) {
+            expired.push(record)
+          } else if (exp <= weekFromNow) {
+            soon.push(record)
+          }
+        })
+      }
+
+      // Also include expiry from inventory transactions (e.g., products added from invoices)
+      const { data: txExpiryData } = await supabase
+        .from('inventory_transactions')
+        .select('id, ingredient_id, product_id, quantity, unit, expiry_date, ingredients(name, base_unit), inventory_products(name, unit)')
+        .not('expiry_date', 'is', null)
+        .eq('tx_type', 'invoice_in')
+
+      ;(txExpiryData || []).forEach((tx: any) => {
+        if (!tx.expiry_date || !tx.quantity) return
+        const exp = new Date(tx.expiry_date as string)
+        const record = {
+          id: tx.id,
+          ingredient_id: tx.ingredient_id || tx.product_id,
+          name: tx.ingredients?.name || tx.inventory_products?.name || 'Unknown',
+          unit: tx.ingredients?.base_unit || tx.inventory_products?.unit || tx.unit || 'pcs',
+          quantity: tx.quantity,
+          expiry_date: tx.expiry_date,
+        }
+        if (exp < today) {
+          expired.push(record)
+        } else if (exp <= weekFromNow) {
+          soon.push(record)
+        }
+      })
+
+      setExpirySoon(soon)
+      setExpiryExpired(expired)
+
       // Fetch discrepancies - commented out as warehouse_discrepancies table doesn't exist yet
       // const { data: discrepancyData } = await supabase
       //   .from('warehouse_discrepancies')
@@ -235,7 +300,7 @@ export function CentralWarehousePanel({
   const handleAddDeliveryItem = () => {
     setDeliveryItems([
       ...deliveryItems,
-      { ingredient_id: '', quantity_ordered: 0, quantity_received: 0 },
+      { ingredient_id: '', quantity_ordered: 0, quantity_received: 0, expiry_date: null },
     ])
   }
 
@@ -312,6 +377,8 @@ export function CentralWarehousePanel({
             quantity_received: item.quantity_received || 0,
             unit: ingredient.unit || 'kg',
             unit_price: ingredient.last_price || 0,
+            // Requires expiry_date column on warehouse_delivery_items
+            expiry_date: item.expiry_date || null,
           })
           if (itemError) {
             console.error(`❌ Delivery item error for ${ingredient.name}:`, itemError)
@@ -621,10 +688,11 @@ export function CentralWarehousePanel({
                   <Label>Items</Label>
                   <div className="bg-gray-50 p-3 rounded-lg max-h-96 overflow-y-auto mb-3">
                     {/* Header row */}
-                    <div className="grid grid-cols-4 gap-2 mb-2 pb-2 border-b">
+                    <div className="grid grid-cols-5 gap-2 mb-2 pb-2 border-b">
                       <div className="text-xs font-semibold text-slate-600">Ingredient</div>
                       <div className="text-xs font-semibold text-slate-600">Qty Ordered</div>
                       <div className="text-xs font-semibold text-slate-600">Qty Received</div>
+                      <div className="text-xs font-semibold text-slate-600">Expiry Date</div>
                       <div className="text-xs font-semibold text-slate-600">Action</div>
                     </div>
                     
@@ -636,7 +704,7 @@ export function CentralWarehousePanel({
                         {deliveryItems.map((item, idx) => {
                           const ing = ingredients.find(i => i.id === item.ingredient_id)
                           return (
-                            <div key={idx} className="grid grid-cols-4 gap-2">
+                            <div key={idx} className="grid grid-cols-5 gap-2 items-center">
                               <Select value={item.ingredient_id} onValueChange={(v) => updateDeliveryItem(idx, 'ingredient_id', v)}>
                                 <SelectTrigger className="h-8 text-sm">
                                   <SelectValue placeholder="Choose ingredient" />
@@ -660,6 +728,12 @@ export function CentralWarehousePanel({
                                 className="h-8 text-sm"
                                 value={item.quantity_received}
                                 onChange={(e) => updateDeliveryItem(idx, 'quantity_received', Number(e.target.value))}
+                              />
+                              <Input
+                                type="date"
+                                className="h-8 text-xs"
+                                value={item.expiry_date || ''}
+                                onChange={(e) => updateDeliveryItem(idx, 'expiry_date', e.target.value || null)}
                               />
                               <Button variant="ghost" size="sm" onClick={() => handleRemoveDeliveryItem(idx)}>Remove</Button>
                             </div>
@@ -924,6 +998,29 @@ export function CentralWarehousePanel({
             </Card>
           </div>
 
+          {/* Expiry alerts summary */}
+          <div className="grid grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Expiring Within 7 Days</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold text-orange-600">{expirySoon.length}</div>
+                <p className="text-sm text-gray-600 mt-1">items close to expiry</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Already Expired</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold text-red-700">{expiryExpired.length}</div>
+                <p className="text-sm text-gray-600 mt-1">items past expiry date</p>
+              </CardContent>
+            </Card>
+          </div>
+
           {lowStockItems.length > 0 && (
             <Card>
               <CardHeader>
@@ -939,6 +1036,53 @@ export function CentralWarehousePanel({
                       </span>
                     </div>
                   ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {(expirySoon.length > 0 || expiryExpired.length > 0) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Expiry Alerts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {expirySoon.length > 0 && (
+                    <div>
+                      <div className="mb-2 text-sm font-semibold text-orange-700 flex items-center gap-1">
+                        <AlertTriangle size={16} /> Expiring in the next 7 days
+                      </div>
+                      <div className="space-y-1">
+                        {expirySoon.map(item => (
+                          <div key={`soon-${item.id}`} className="flex justify-between items-center p-2 bg-orange-50 rounded">
+                            <span className="font-medium">{item.name}</span>
+                            <span className="text-xs text-orange-800">
+                              {item.quantity} {item.unit} • expires {item.expiry_date}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {expiryExpired.length > 0 && (
+                    <div>
+                      <div className="mb-2 text-sm font-semibold text-red-700 flex items-center gap-1">
+                        <AlertTriangle size={16} /> Already expired
+                      </div>
+                      <div className="space-y-1">
+                        {expiryExpired.map(item => (
+                          <div key={`exp-${item.id}`} className="flex justify-between items-center p-2 bg-red-50 rounded">
+                            <span className="font-medium">{item.name}</span>
+                            <span className="text-xs text-red-800">
+                              {item.quantity} {item.unit} • expired {item.expiry_date}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
