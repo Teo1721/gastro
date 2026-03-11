@@ -461,8 +461,8 @@ export default function OpsDashboard() {
   const cash = Number(salesForm.cash) || 0
   const online = Number(salesForm.online) || 0
   const paymentsTotal = card + cash + online
-  // Force gross to always match sum of payment methods to satisfy DB constraint
-  const gross = paymentsTotal
+  // Gross is always the rounded sum of payment methods (allows floats but keeps DB check consistent)
+  const gross = Number(paymentsTotal.toFixed(2))
   const planGross = Number(salesForm.targetGross) || 0
   const planTx = Number(salesForm.targetTx) || 0
   const netManual = Number(salesForm.netRevenue) || 0
@@ -622,18 +622,33 @@ export default function OpsDashboard() {
     setValidationErrors(errors)
     if (errors.length > 0) { window.scrollTo({ top: 0, behavior: 'smooth' }); return }
 
+    const toNum = (v: any): number => {
+      const n = Number(v)
+      return Number.isFinite(n) ? n : 0
+    }
+
     const payload: any = {
       location_id: selectedLocation.location_id,
       company_id: selectedLocation.locations.company_id,
-      date: reportDate, transaction_count: tx, gross_revenue: gross,
-      net_revenue: net, card_payments: card, cash_payments: cash,
-      comments: salesForm.comments, target_gross_sales: planGross,
-      target_transactions: planTx, target_net_sales: Number(salesForm.targetNetto) || 0,
-      total_labor_hours: totalHours,
-      avg_hourly_rate: totalHours > 0 ? laborCost / totalHours : 0,
-      status: 'submitted', cash_reported: cashReported, cash_physical: cashPhysical,
-      cash_diff: cashDiff, petty_expenses: pettyExpense,
-      daily_losses: lossesVal, daily_refunds: refundsVal,
+      date: reportDate,
+      transaction_count: toNum(tx),
+      gross_revenue: toNum(gross),
+      net_revenue: toNum(net),
+      card_payments: toNum(card),
+      cash_payments: toNum(cash),
+      comments: salesForm.comments,
+      target_gross_sales: toNum(planGross),
+      target_transactions: toNum(planTx),
+      target_net_sales: toNum(salesForm.targetNetto),
+      total_labor_hours: toNum(totalHours),
+      avg_hourly_rate: totalHours > 0 ? toNum(laborCost / totalHours) : 0,
+      status: 'submitted',
+      cash_reported: toNum(cashReported),
+      cash_physical: toNum(cashPhysical),
+      cash_diff: toNum(cashDiff),
+      petty_expenses: toNum(pettyExpense),
+      daily_losses: toNum(lossesVal),
+      daily_refunds: toNum(refundsVal),
       incident_type: salesForm.incidentType, incident_details: salesForm.incidentDetails,
       closing_person: closingPersonName, closing_person_email: closingPersonEmail,
       closing_time: new Date().toISOString(),
@@ -641,13 +656,13 @@ export default function OpsDashboard() {
       labor_explanation: salesForm.laborExplanation || null,
       sales_deviation_explanation: salesForm.salesDeviationExplanation || null,
       cash_diff_explanation: salesForm.cashDiffExplanation || null,
-      online_sales: Number(salesForm.online) || 0,
+      online_sales: toNum(salesForm.online),
     }
-
-    const q = existingReportId
+    const query = existingReportId
       ? supabase.from('sales_daily').update(payload).eq('id', existingReportId)
       : supabase.from('sales_daily').insert(payload)
-    const { error } = await q
+
+    const { error } = await query
     if (error) { alert('Błąd: ' + error.message); return }
 
     const validRows = employeeRows.filter(r => r.employee_id && Number(r.hours) > 0)
