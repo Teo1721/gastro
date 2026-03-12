@@ -80,7 +80,7 @@ function IngredientsSection({ supabase }: { supabase: SupabaseClient }) {
   }
 
   async function fetchProducts() {
-    let query = supabase.from("inventory_products").select("id,name,category,unit,last_price,active");
+    let query = supabase.from("inventory_products").select("id,name,category,unit,last_price,active,company_id,brand_id");
     if (search) query = query.ilike("name", `%${search}%`);
     if (categoryFilter) query = query.eq("category", categoryFilter);
     query = query.order(sortBy, { ascending: sortDir === "asc" });

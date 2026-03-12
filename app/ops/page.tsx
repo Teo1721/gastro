@@ -24,7 +24,7 @@ import * as XLSX from 'xlsx'
 /* ================================================================== */
 type LocationData = {
   location_id: string
-  locations: { name: string; id: string; company_id: string }
+  locations: { name: string; id: string; company_id: string; brand_id?: string | null }
 }
 type Employee = { id: string; full_name: string; real_hour_cost: number | null }
 type EmployeeRow = { employee_id: string; hours: string }
@@ -239,7 +239,7 @@ export default function OpsDashboard() {
   const [semisReconSaving, setSemisReconSaving] = useState(false)
 
   // ── Inventory state ──
-  const [inventorySubView, setInventorySubView] = useState<'active' | 'fill' | 'history'>('active')
+  const [inventorySubView, setInventorySubView] = useState<'active' | 'fill' | 'history' | 'products'>('active')
   const [inventoryJobs, setInventoryJobs] = useState<InventoryJob[]>([])
   const [inventoryHistory, setInventoryHistory] = useState<InventoryJob[]>([])
   const [selectedJob, setSelectedJob] = useState<InventoryJob | null>(null)
@@ -248,6 +248,15 @@ export default function OpsDashboard() {
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState('')
   const [inventorySaving, setInventorySaving] = useState(false)
   const [reportHistory, setReportHistory] = useState<DailyReportHistoryItem[]>([])
+  const [inventoryProducts, setInventoryProducts] = useState<{ id: string; name: string; unit: string; category: string; is_food: boolean; active: boolean; last_price: number }[]>([])
+  const [productSearch, setProductSearch] = useState('')
+  const [productCategoryFilter, setProductCategoryFilter] = useState('')
+  const [newProduct, setNewProduct] = useState({ name: '', unit: 'kg', category: 'inne', is_food: true, last_price: '' })
+  const [productSaving, setProductSaving] = useState(false)
+  const [importPreview, setImportPreview] = useState<{ name: string; unit: string; category: string; last_price: string; is_food: boolean }[]>([])
+  const [importSaving, setImportSaving] = useState(false)
+  const [editingProductId, setEditingProductId] = useState<string | null>(null)
+  const [editingProduct, setEditingProduct] = useState<{ name: string; unit: string; category: string; last_price: string; is_food: boolean; active: boolean } | null>(null)
 
   // ═══════════════════════════════════════════════════════════════════
   // FORMATTING
@@ -255,6 +264,31 @@ export default function OpsDashboard() {
   const fmt0 = (v: number) => new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN', maximumFractionDigits: 0 }).format(v || 0)
   const fmt2 = (v: number) => new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN', maximumFractionDigits: 2 }).format(v || 0)
   const fmtPct = (v: number) => (v * 100).toFixed(1).replace('.', ',') + '%'
+
+  // ═══════════════════════════════════════════════════════════════════
+  // COMMON SUPABASE ERROR HANDLER
+  // ═══════════════════════════════════════════════════════════════════
+  const handleSupabaseError = async (err: any, prefix: string = 'Błąd') => {
+    if (!err) return
+    const message = String(err.message || err || '')
+    if (message.toLowerCase().includes('jwt expired')) {
+      alert('Twoja sesja wygasła. Zaloguj się ponownie.')
+      try { await supabase.auth.signOut() } catch (_) {}
+      router.push('/login')
+      return
+    }
+    alert(prefix + ': ' + message)
+  }
+
+  const filteredProducts = useMemo(() => {
+    let items = inventoryProducts
+    if (productSearch) {
+      const q = productSearch.toLowerCase()
+      items = items.filter(p => p.name.toLowerCase().includes(q))
+    }
+    if (productCategoryFilter) items = items.filter(p => p.category === productCategoryFilter)
+    return items
+  }, [inventoryProducts, productSearch, productCategoryFilter])
 
   // ═══════════════════════════════════════════════════════════════════
   // INIT
@@ -280,7 +314,7 @@ export default function OpsDashboard() {
 
       const { data: access } = await supabase
         .from('user_access')
-        .select('location_id, locations ( id, name, company_id )')
+        .select('location_id, locations ( id, name, company_id, brand_id )')
         .eq('user_id', user.id)
       if (access) {
         // @ts-ignore
@@ -406,6 +440,25 @@ export default function OpsDashboard() {
     }
     fetchInventory()
   }, [selectedLocation, activeView, supabase, inventorySubView])
+
+  // ═══════════════════════════════════════════════════════════════════
+  // LOAD: Inventory products for OPS product management
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!selectedLocation || activeView !== 'inventory' || inventorySubView !== 'products') return
+    const fetchProducts = async () => {
+      let query = supabase.from('inventory_products').select('*').order('category').order('name')
+      if (selectedLocation?.locations.company_id) {
+        query = query.eq('company_id', selectedLocation.locations.company_id)
+      }
+      if (selectedLocation?.locations.brand_id) {
+        query = query.eq('brand_id', selectedLocation.locations.brand_id)
+      }
+      const { data } = await query
+      if (data) setInventoryProducts(data as any)
+    }
+    fetchProducts()
+  }, [selectedLocation, activeView, inventorySubView, supabase])
 
   // ═══════════════════════════════════════════════════════════════════
   // LOAD: Warehouse products for COS invoices
@@ -663,7 +716,7 @@ export default function OpsDashboard() {
       : supabase.from('sales_daily').insert(payload)
 
     const { error } = await query
-    if (error) { alert('Błąd: ' + error.message); return }
+    if (error) { await handleSupabaseError(error, 'Błąd'); return }
 
     const validRows = employeeRows.filter(r => r.employee_id && Number(r.hours) > 0)
     await supabase.from('employee_daily_hours').delete()
@@ -710,7 +763,7 @@ export default function OpsDashboard() {
       const ext = invoiceFile.name.split('.').pop()
       const fn = `${selectedLocation.location_id}/${Date.now()}.${ext}`
       const { error: upErr } = await supabase.storage.from('invoices').upload(fn, invoiceFile)
-      if (upErr) { alert('Błąd pliku: ' + upErr.message); setUploading(false); return }
+      if (upErr) { await handleSupabaseError(upErr, 'Błąd pliku'); setUploading(false); return }
       attachmentUrl = supabase.storage.from('invoices').getPublicUrl(fn).data.publicUrl
     }
 
@@ -804,7 +857,7 @@ export default function OpsDashboard() {
       })
       if (rpcErr) {
         console.error('RPC error', rpcErr)
-        alert('Błąd zapisu faktury: ' + rpcErr.message)
+        await handleSupabaseError(rpcErr, 'Błąd zapisu faktury')
         setUploading(false); return
       }
       invoiceId = rpcRes?.invoice_id || null
@@ -918,7 +971,7 @@ export default function OpsDashboard() {
       }))
       
       const { data: inv, error: e } = await supabase.from('invoices').insert(invoicePayload).select('id').single()
-      if (e) { alert('Błąd: ' + e.message); setUploading(false); return }
+      if (e) { await handleSupabaseError(e, 'Błąd'); setUploading(false); return }
       
       if (inv) {
         invoiceId = inv.id
@@ -1051,7 +1104,7 @@ export default function OpsDashboard() {
         })
         if (rows.length === 0) alert('Brak danych.')
         else { await supabase.from('imported_costs').insert(rows); alert(`✅ ${rows.length} pozycji zaimportowanych`) }
-      } catch (err: any) { alert('Błąd: ' + err.message) }
+      } catch (err: any) { await handleSupabaseError(err, 'Błąd') }
       finally { setExcelLoading(false); e.target.value = null }
     }
     reader.readAsBinaryString(file)
@@ -1078,7 +1131,7 @@ export default function OpsDashboard() {
     })
     
     if (error) {
-      alert('Błąd: ' + error.message)
+      await handleSupabaseError(error, 'Błąd')
     } else {
       alert('✅ Pozycja dodana')
       setNewSemisEntry({ ...emptySemisReconEntry, invoice_date: new Date().toISOString().split('T')[0], location_id: '' })
@@ -1104,7 +1157,7 @@ export default function OpsDashboard() {
       .eq('status', 'pending')
     
     if (error) {
-      alert('Błąd: ' + error.message)
+      await handleSupabaseError(error, 'Błąd')
     } else {
       // Create notification for admin
       await supabase.from('admin_notifications').insert({
@@ -1208,6 +1261,137 @@ export default function OpsDashboard() {
     alert('✅ Inwentaryzacja wysłana do zatwierdzenia')
     setSelectedJob(null)
     setInventorySubView('active')
+  }
+
+  const saveNewProduct = async () => {
+    if (!newProduct.name.trim()) { alert('Podaj nazwę produktu'); return }
+    setProductSaving(true)
+    const { error } = await supabase.from('inventory_products').insert({
+      name: newProduct.name.trim(),
+      unit: newProduct.unit,
+      category: newProduct.category,
+      is_food: newProduct.is_food,
+      last_price: Number(newProduct.last_price) || 0,
+      active: true,
+      company_id: selectedLocation?.locations.company_id || null,
+      brand_id: selectedLocation?.locations.brand_id || null,
+    })
+    if (error) {
+      await handleSupabaseError(error, 'Błąd zapisu produktu')
+    } else {
+      setNewProduct({ name: '', unit: 'kg', category: 'inne', is_food: true, last_price: '' })
+      const { data } = await supabase.from('inventory_products').select('*').order('category').order('name')
+      if (data) setInventoryProducts(data as any)
+    }
+    setProductSaving(false)
+  }
+
+  const handleProductExcelUpload = async (e: any) => {
+    const file = e.target.files?.[0]; if (!file) return
+    const reader = new FileReader()
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target?.result, { type: 'binary' })
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]) as any[]
+        const rows: { name: string; unit: string; category: string; last_price: string; is_food: boolean }[] = []
+        data.forEach(row => {
+          const name = String(row['name'] || row['Produkt'] || row['produkt'] || '').trim()
+          if (!name) return
+          const unit = String(row['unit'] || row['Jednostka'] || row['jednostka'] || 'kg').trim() || 'kg'
+          const category = String(row['category'] || row['Kategoria'] || row['kategoria'] || 'inne').trim() || 'inne'
+          const priceRaw = row['last_price'] ?? row['Cena netto'] ?? row['PLN Netto'] ?? row['Netto']
+          const last_price = priceRaw !== undefined && priceRaw !== null ? String(priceRaw) : ''
+          rows.push({ name, unit, category, last_price, is_food: true })
+        })
+        if (rows.length === 0) { alert('Brak produktów w pliku.'); return }
+        setImportPreview(rows)
+      } catch (err: any) {
+        await handleSupabaseError(err, 'Błąd importu produktów')
+      } finally {
+        e.target.value = null
+      }
+    }
+    reader.readAsBinaryString(file)
+  }
+
+  const saveImportPreview = async () => {
+    if (!selectedLocation) { alert('Wybierz lokalizację przed zapisem produktów.'); return }
+    if (importPreview.length === 0) { alert('Brak produktów do zapisania.'); return }
+    setImportSaving(true)
+    try {
+      const rows = importPreview
+        .map(r => ({
+          name: r.name.trim(),
+          unit: r.unit || 'kg',
+          category: r.category || 'inne',
+          is_food: r.is_food,
+          last_price: Number(r.last_price.replace(',', '.')) || 0,
+          active: true,
+          company_id: selectedLocation.locations.company_id || null,
+          brand_id: selectedLocation.locations.brand_id || null,
+        }))
+        .filter(r => r.name)
+      if (rows.length === 0) { alert('Brak poprawnych produktów do zapisania.'); setImportSaving(false); return }
+      const { error } = await supabase.from('inventory_products').insert(rows)
+      if (error) {
+        await handleSupabaseError(error, 'Błąd zapisu produktów')
+      } else {
+        alert(`✅ Zapisano ${rows.length} produktów`)
+        setImportPreview([])
+        const { data } = await supabase.from('inventory_products').select('*').order('category').order('name')
+        if (data) setInventoryProducts(data as any)
+      }
+    } finally {
+      setImportSaving(false)
+    }
+  }
+
+  const startEditProduct = (p: { id: string; name: string; unit: string; category: string; is_food: boolean; active: boolean; last_price: number }) => {
+    setEditingProductId(p.id)
+    setEditingProduct({
+      name: p.name,
+      unit: p.unit,
+      category: p.category,
+      last_price: p.last_price ? String(p.last_price) : '',
+      is_food: p.is_food,
+      active: p.active,
+    })
+  }
+
+  const cancelEditProduct = () => {
+    setEditingProductId(null)
+    setEditingProduct(null)
+  }
+
+  const saveEditedProduct = async () => {
+    if (!editingProductId || !editingProduct) return
+    const payload = {
+      name: editingProduct.name.trim(),
+      unit: editingProduct.unit || 'kg',
+      category: editingProduct.category || 'inne',
+      is_food: editingProduct.is_food,
+      active: editingProduct.active,
+      last_price: Number(editingProduct.last_price.replace(',', '.')) || 0,
+    }
+    if (!payload.name) { alert('Nazwa produktu jest wymagana.'); return }
+    const { error } = await supabase.from('inventory_products').update(payload).eq('id', editingProductId)
+    if (error) {
+      await handleSupabaseError(error, 'Błąd aktualizacji produktu')
+      return
+    }
+    setInventoryProducts(prev => prev.map(p => p.id === editingProductId ? { ...p, ...payload } : p))
+    setEditingProductId(null)
+    setEditingProduct(null)
+  }
+
+  const deactivateProduct = async (id: string) => {
+    if (!confirm('Wyłączyć produkt? Nie będzie dostępny do wyboru w przyszłości.')) return
+    const { error } = await supabase.from('inventory_products').update({ active: false }).eq('id', id)
+    if (error) {
+      await handleSupabaseError(error, 'Błąd wyłączania produktu')
+      return
+    }
+    setInventoryProducts(prev => prev.map(p => p.id === id ? { ...p, active: false } : p))
   }
 
   // ── Row helpers ──
@@ -2138,6 +2322,7 @@ export default function OpsDashboard() {
                 <div className="flex gap-2 mt-4">
                   <Button variant={inventorySubView === 'active' ? 'default' : 'outline'} onClick={() => setInventorySubView('active')}>Aktywne</Button>
                   <Button variant={inventorySubView === 'history' ? 'default' : 'outline'} onClick={() => setInventorySubView('history')}>Historia</Button>
+                  <Button variant={inventorySubView === 'products' ? 'default' : 'outline'} onClick={() => setInventorySubView('products')}>Produkty</Button>
                 </div>
               )}
             </header>
@@ -2298,6 +2483,202 @@ export default function OpsDashboard() {
                     </table>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* ── Products (OPS product catalog) ── */}
+            {inventorySubView === 'products' && (
+              <div className="space-y-6">
+                <Card><CardContent className="py-4 space-y-4">
+                  <h2 className="text-lg font-semibold">Dodaj produkt do systemu</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+                    <div className="md:col-span-2">
+                      <Label className="text-xs font-medium text-slate-600">Nazwa produktu</Label>
+                      <Input value={newProduct.name} onChange={e => setNewProduct(p => ({ ...p, name: e.target.value }))} placeholder="np. Mleko 3,2% 1L" />
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-slate-600">Jednostka</Label>
+                      <select value={newProduct.unit} onChange={e => setNewProduct(p => ({ ...p, unit: e.target.value }))}
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                        {UNITS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-slate-600">Kategoria</Label>
+                      <select value={newProduct.category} onChange={e => setNewProduct(p => ({ ...p, category: e.target.value }))}
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                        {PRODUCT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-slate-600">Cena netto (opcjonalnie)</Label>
+                      <Input type="number" value={newProduct.last_price} onChange={e => setNewProduct(p => ({ ...p, last_price: e.target.value }))} placeholder="0,00" />
+                    </div>
+                    <div className="md:col-span-5 flex items-center justify-between gap-4 pt-2">
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <input id="is_food" type="checkbox" checked={newProduct.is_food}
+                          onChange={e => setNewProduct(p => ({ ...p, is_food: e.target.checked }))} className="h-4 w-4" />
+                        <Label htmlFor="is_food" className="cursor-pointer">Produkt spożywczy</Label>
+                      </div>
+                      <Button onClick={saveNewProduct} disabled={productSaving} className="ml-auto">
+                        {productSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                        Zapisz produkt
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent></Card>
+
+                <Card><CardContent className="py-4 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div className="flex gap-3 flex-1">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
+                        <Input placeholder="Szukaj produktu…" value={productSearch} onChange={e => setProductSearch(e.target.value)} className="pl-10" />
+                      </div>
+                      <select value={productCategoryFilter} onChange={e => setProductCategoryFilter(e.target.value)}
+                        className="h-10 rounded-md border border-input bg-background px-3 text-sm">
+                        <option value="">Wszystkie kategorie</option>
+                        {PRODUCT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-slate-600 mb-1 block">Import z Excela</Label>
+                      <Input type="file" accept=".xlsx,.xls" onChange={handleProductExcelUpload} className="h-10 py-1" />
+                      <p className="text-[11px] text-slate-400 mt-1">Kolumny: name / Produkt, Jednostka, Kategoria, Cena netto</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 border-t pt-3 max-h-[420px] overflow-y-auto">
+                    {importPreview.length > 0 && (
+                      <div className="mb-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm font-medium text-slate-700">Podgląd importu ({importPreview.length} pozycji)</p>
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => setImportPreview([])}>Wyczyść podgląd</Button>
+                            <Button size="sm" onClick={saveImportPreview} disabled={importSaving} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                              {importSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                              Zapisz produkty
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="border rounded-md max-h-64 overflow-y-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b bg-slate-50 text-slate-500">
+                                <th className="py-2 px-2 text-left">Nazwa</th>
+                                <th className="px-2 text-left">Kategoria</th>
+                                <th className="px-2 text-left">Jedn.</th>
+                                <th className="px-2 text-right">Cena netto</th>
+                                <th className="px-2 text-center">Spożywczy</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {importPreview.map((row, idx) => (
+                                <tr key={idx} className="border-b last:border-0">
+                                  <td className="py-1 px-2">
+                                    <Input value={row.name} onChange={e => setImportPreview(p => p.map((r, i) => i === idx ? { ...r, name: e.target.value } : r))} className="h-7 text-xs" />
+                                  </td>
+                                  <td className="px-2">
+                                    <Input value={row.category} onChange={e => setImportPreview(p => p.map((r, i) => i === idx ? { ...r, category: e.target.value } : r))} className="h-7 text-xs" />
+                                  </td>
+                                  <td className="px-2">
+                                    <Input value={row.unit} onChange={e => setImportPreview(p => p.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r))} className="h-7 text-xs" />
+                                  </td>
+                                  <td className="px-2">
+                                    <Input value={row.last_price} onChange={e => setImportPreview(p => p.map((r, i) => i === idx ? { ...r, last_price: e.target.value } : r))} className="h-7 text-xs text-right" />
+                                  </td>
+                                  <td className="px-2 text-center">
+                                    <input type="checkbox" checked={row.is_food} onChange={e => setImportPreview(p => p.map((r, i) => i === idx ? { ...r, is_food: e.target.checked } : r))} />
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {filteredProducts.length === 0 ? (
+                      <p className="text-center py-6 text-slate-400 text-sm">Brak produktów spełniających kryteria.</p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left text-xs text-slate-500 uppercase">
+                            <th className="py-2 pr-2">Nazwa</th>
+                            <th className="pr-2">Kategoria</th>
+                            <th className="pr-2">Jedn.</th>
+                            <th className="pr-2 text-right">Cena netto</th>
+                            <th className="pr-2 text-right">Status</th>
+                            <th className="pr-2 text-right">Akcje</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredProducts.map(p => {
+                            const isEditing = editingProductId === p.id && editingProduct
+                            return (
+                              <tr key={p.id} className="border-b last:border-0">
+                                <td className="py-2 pr-2">
+                                  {isEditing ? (
+                                    <Input value={editingProduct!.name} onChange={e => setEditingProduct(prev => prev ? { ...prev, name: e.target.value } : prev)} className="h-8 text-xs" />
+                                  ) : (
+                                    p.name
+                                  )}
+                                </td>
+                                <td className="pr-2 text-slate-500 text-xs">
+                                  {isEditing ? (
+                                    <Input value={editingProduct!.category} onChange={e => setEditingProduct(prev => prev ? { ...prev, category: e.target.value } : prev)} className="h-8 text-xs" />
+                                  ) : (
+                                    p.category
+                                  )}
+                                </td>
+                                <td className="pr-2 text-slate-500 text-xs">
+                                  {isEditing ? (
+                                    <Input value={editingProduct!.unit} onChange={e => setEditingProduct(prev => prev ? { ...prev, unit: e.target.value } : prev)} className="h-8 text-xs" />
+                                  ) : (
+                                    p.unit
+                                  )}
+                                </td>
+                                <td className="pr-2 text-right text-slate-600">
+                                  {isEditing ? (
+                                    <Input value={editingProduct!.last_price} onChange={e => setEditingProduct(prev => prev ? { ...prev, last_price: e.target.value } : prev)} className="h-8 text-xs text-right" />
+                                  ) : (
+                                    p.last_price ? fmt2(p.last_price) : '—'
+                                  )}
+                                </td>
+                                <td className="pr-2 text-right text-xs">
+                                  <span className={`px-2 py-1 rounded-full ${p.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                                    {p.active ? 'Aktywny' : 'Wyłączony'}
+                                  </span>
+                                </td>
+                                <td className="pr-2 text-right text-xs">
+                                  {isEditing ? (
+                                    <div className="flex justify-end gap-2">
+                                      <Button size="icon" variant="outline" className="h-7 w-7" onClick={saveEditedProduct}>
+                                        <CheckCircle2 className="w-3 h-3" />
+                                      </Button>
+                                      <Button size="icon" variant="outline" className="h-7 w-7" onClick={cancelEditProduct}>
+                                        <XCircle className="w-3 h-3" />
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex justify-end gap-2">
+                                      <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => startEditProduct(p)}>
+                                        <FileText className="w-3 h-3" />
+                                      </Button>
+                                      <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => deactivateProduct(p.id)} disabled={!p.active}>
+                                        <Trash2 className="w-3 h-3" />
+                                      </Button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </CardContent></Card>
               </div>
             )}
           </div>
