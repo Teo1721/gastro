@@ -11,6 +11,7 @@ type OpsSidebarProps = {
   onNavigate: (view: string) => void
   onLogout: () => void
   onSwitchLocation: () => void
+  badges?: Record<string, number>
 }
 
 export function OpsSidebar({
@@ -19,6 +20,7 @@ export function OpsSidebar({
   onNavigate,
   onLogout,
   onSwitchLocation,
+  badges = {},
 }: OpsSidebarProps) {
   const navItems = [
     { key: 'reporting', label: 'Raport dzienny', icon: LayoutDashboard },
@@ -47,7 +49,7 @@ export function OpsSidebar({
             key={key}
             variant="ghost"
             onClick={() => onNavigate(key)}
-            className={`w-full justify-start text-left h-11 ${
+            className={`relative w-full justify-start text-left h-11 ${
               activeView === key
                 ? 'bg-slate-700 text-white'
                 : 'text-slate-300 hover:bg-slate-800 hover:text-white'
@@ -55,6 +57,11 @@ export function OpsSidebar({
           >
             <Icon className="w-5 h-5 mr-3" />
             {label}
+            {(badges[key] ?? 0) > 0 && (
+              <span className="absolute right-3 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {badges[key]! > 9 ? '9+' : badges[key]}
+              </span>
+            )}
           </Button>
         ))}
       </nav>

@@ -74,6 +74,7 @@ type DailyReportHistoryItem = {
   status: string | null
   closing_person: string | null
   closing_time: string | null
+  rejection_note: string | null
 }
 
 type InvoiceHistoryItem = {
@@ -172,6 +173,8 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   submitted: { label: 'Wysłana', color: 'bg-blue-100 text-blue-700' },
   approved: { label: 'Zatwierdzona', color: 'bg-green-100 text-green-700' },
   correction: { label: 'Do korekty', color: 'bg-red-100 text-red-700' },
+  rejected: { label: 'Wycofany', color: 'bg-red-100 text-red-700' },
+  pending: { label: 'Oczekujący', color: 'bg-amber-100 text-amber-700' },
 }
 
 /* ================================================================== */
@@ -248,6 +251,7 @@ export default function OpsDashboard() {
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState('')
   const [inventorySaving, setInventorySaving] = useState(false)
   const [reportHistory, setReportHistory] = useState<DailyReportHistoryItem[]>([])
+  const [rejectedReportCount, setRejectedReportCount] = useState(0)
   const [inventoryProducts, setInventoryProducts] = useState<{ id: string; name: string; unit: string; category: string; is_food: boolean; active: boolean; last_price: number }[]>([])
   const [productSearch, setProductSearch] = useState('')
   const [productCategoryFilter, setProductCategoryFilter] = useState('')
@@ -391,13 +395,33 @@ export default function OpsDashboard() {
   }, [selectedLocation, reportDate, activeView, supabase])
 
   // ═══════════════════════════════════════════════════════════════════
+  // LOAD: Rejected/withdrawn report count (for red dot badge)
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!selectedLocation) return
+    const fetchRejectedCount = async () => {
+      const { count } = await supabase.from('sales_daily')
+        .select('id', { count: 'exact', head: true })
+        .eq('location_id', selectedLocation.location_id)
+        .in('status', ['rejected', 'correction'])
+      setRejectedReportCount(count ?? 0)
+    }
+    fetchRejectedCount()
+    const channel = supabase
+      .channel('ops_report_status_' + selectedLocation.location_id)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sales_daily', filter: `location_id=eq.${selectedLocation.location_id}` }, fetchRejectedCount)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [selectedLocation, supabase])
+
+  // ═══════════════════════════════════════════════════════════════════
   // LOAD: Daily report history
   // ═══════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (!selectedLocation || activeView !== 'reporting' || reportingSubView !== 'history') return
     const fetchHistory = async () => {
       const { data } = await supabase.from('sales_daily')
-        .select('id, date, gross_revenue, net_revenue, transaction_count, total_labor_hours, status, closing_person, closing_time')
+        .select('id, date, gross_revenue, net_revenue, transaction_count, total_labor_hours, status, closing_person, closing_time, rejection_note')
         .eq('location_id', selectedLocation.location_id)
         .order('date', { ascending: false })
         .limit(60)
@@ -1436,6 +1460,7 @@ export default function OpsDashboard() {
         onNavigate={(v: string) => setActiveView(v as ActiveView)}
         onLogout={async () => { await supabase.auth.signOut(); router.push('/login') }}
         onSwitchLocation={() => setSelectedLocation(null)}
+        badges={{ reporting: rejectedReportCount }}
       />
 
       <main className="flex-1 ml-64 p-12">
@@ -1785,15 +1810,28 @@ export default function OpsDashboard() {
                         </thead>
                         <tbody>
                           {reportHistory.map(r => (
-                            <tr key={r.id} className="border-b hover:bg-gray-50">
-                              <td className="py-2 px-3 font-medium">{r.date}</td>
-                              <td className="px-3 text-right">{fmt2(Number(r.gross_revenue || 0))}</td>
-                              <td className="px-3 text-right">{fmt2(Number(r.net_revenue || 0))}</td>
-                              <td className="px-3 text-right">{r.transaction_count ?? '—'}</td>
-                              <td className="px-3 text-right">{r.total_labor_hours != null ? r.total_labor_hours.toFixed(1) : '—'}</td>
-                              <td className="px-3 text-xs uppercase text-slate-600">{r.status || '—'}</td>
-                              <td className="px-3 text-xs text-slate-500">{r.closing_person || '—'}</td>
-                            </tr>
+                            <>
+                              <tr key={r.id} className="border-b hover:bg-gray-50">
+                                <td className="py-2 px-3 font-medium">{r.date}</td>
+                                <td className="px-3 text-right">{fmt2(Number(r.gross_revenue || 0))}</td>
+                                <td className="px-3 text-right">{fmt2(Number(r.net_revenue || 0))}</td>
+                                <td className="px-3 text-right">{r.transaction_count ?? '—'}</td>
+                                <td className="px-3 text-right">{r.total_labor_hours != null ? r.total_labor_hours.toFixed(1) : '—'}</td>
+                                <td className="px-3">
+                                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_LABELS[r.status ?? '']?.color || 'bg-gray-100 text-gray-700'}`}>
+                                    {STATUS_LABELS[r.status ?? '']?.label || r.status || '—'}
+                                  </span>
+                                </td>
+                                <td className="px-3 text-xs text-slate-500">{r.closing_person || '—'}</td>
+                              </tr>
+                              {r.status === 'rejected' && r.rejection_note && (
+                                <tr key={r.id + '_note'} className="bg-red-50 border-b">
+                                  <td colSpan={7} className="px-3 py-2 text-xs text-red-700">
+                                    <span className="font-semibold">⚠ Powód wycofania: </span>{r.rejection_note}
+                                  </td>
+                                </tr>
+                              )}
+                            </>
                           ))}
                         </tbody>
                       </table>
